@@ -71,6 +71,15 @@ python -m compileall app
 - `property`, `updated_since`, `start`, `end`
 - `limit`, `cursor`
 
+
+## Troubleshooting
+- If `docker compose exec api alembic upgrade head` fails with `ModuleNotFoundError: No module named "app"`, rebuild images after pulling latest changes and retry:
+  ```bash
+  docker compose down
+  docker compose up --build -d
+  docker compose exec api alembic upgrade head
+  ```
+
 ## Extending with new adapters
 1. Add adapter module implementing `BaseAdapter` contract.
 2. Return normalized Pydantic models (`NormalizedStation`, `NormalizedReach`, etc.).
