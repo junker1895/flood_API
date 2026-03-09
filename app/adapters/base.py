@@ -25,6 +25,7 @@ class NormalizedReach(BaseModel):
     source_type: str = "modeled"
     latitude: float | None = None
     longitude: float | None = None
+    geometry_wkt: str | None = None
     raw_metadata: dict[str, Any]
 
 
