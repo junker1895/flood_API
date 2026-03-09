@@ -1,6 +1,7 @@
 import logging
 
 import httpx
+from geoalchemy2 import WKTElement
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,7 @@ from app.adapters.usgs import USGSAdapter
 from app.adapters.base import NormalizedObservation
 from app.core.ids import station_id
 from app.core.time import utcnow
+from app.db.geometry import point_geom_from_latlon
 from app.db.models import Provider, Reach, Station
 from app.services.ingestion_service import tracked_run, upsert_latest_and_append_ts
 from app.services.provider_registry import build_provider
@@ -49,6 +51,7 @@ async def _enrich_ea_station_if_missing(db: Session, adapter: EAEnglandAdapter, 
     db.merge(
         Station(
             **station_payload,
+            geom=point_geom_from_latlon(station_payload.get("latitude"), station_payload.get("longitude")),
             observed_properties={"stage": True},
             canonical_primary_property="stage",
             stage_unit_native=raw.get("unitName"),
@@ -89,6 +92,7 @@ async def _enrich_usgs_station_if_missing(db: Session, adapter: USGSAdapter, obs
         db.merge(
             Station(
                 **payload,
+                geom=point_geom_from_latlon(payload.get("latitude"), payload.get("longitude")),
                 first_seen_at=now,
                 last_seen_at=now,
                 last_metadata_refresh_at=now,
@@ -136,9 +140,15 @@ async def _enrich_geoglows_reach_if_missing(db: Session, adapter: GeoglowsAdapte
 
     reach = adapter.normalize_reach(selected)
     now = utcnow()
+    payload = reach.model_dump()
+    reach_geometry_wkt = payload.pop("geometry_wkt", None)
+    reach_geom = WKTElement(reach_geometry_wkt, srid=4326) if reach_geometry_wkt else point_geom_from_latlon(
+        payload.get("latitude"), payload.get("longitude")
+    )
     db.merge(
         Reach(
-            **reach.model_dump(),
+            **payload,
+            geom=reach_geom,
             first_seen_at=now,
             last_metadata_refresh_at=now,
             normalization_version="v1",

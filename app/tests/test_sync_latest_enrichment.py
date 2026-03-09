@@ -126,6 +126,9 @@ def test_sync_latest_enriches_missing_ea_station_and_retries(monkeypatch):
     asyncio.run(sync_latest.run(db))
 
     assert "ea_england-A1" in db.stations
+    station = next(e for e in db.merged if getattr(e, "station_id", None) == "ea_england-A1")
+    assert station.geom is not None
+    assert station.geom.data == "POINT(-1.2 51.1)"
     assert calls["count"] == 2
 
 
@@ -233,6 +236,9 @@ def test_sync_latest_enriches_missing_usgs_station_and_retries(monkeypatch):
     asyncio.run(sync_latest.run(db))
 
     assert "usgs-01646500" in db.stations
+    station = next(e for e in db.merged if getattr(e, "station_id", None) == "usgs-01646500")
+    assert station.geom is not None
+    assert station.geom.data == "POINT(-77.0 38.9)"
     assert calls["count"] == 2
 
 
