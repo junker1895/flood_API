@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 import httpx
 from sqlalchemy.orm import Session
@@ -10,6 +11,19 @@ from app.services.ingestion_service import tracked_run
 from app.services.provider_registry import build_provider
 
 logger = logging.getLogger(__name__)
+
+
+def make_json_safe(obj):
+    if isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [make_json_safe(v) for v in obj]
+
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    return obj
 
 
 def _ensure_provider(db: Session, provider_id: str) -> None:
@@ -33,9 +47,13 @@ async def run(db: Session) -> None:
             return
 
         raw_count = len(records)
-        logger.info("sync_warnings provider=%s fetched_records=%s", ea.provider_id, raw_count)
+        logger.info(
+            "sync_warnings provider=%s fetched_records=%s", ea.provider_id, raw_count
+        )
         if raw_count == 0:
-            logger.info("sync_warnings provider=%s fetched zero warning records", ea.provider_id)
+            logger.info(
+                "sync_warnings provider=%s fetched zero warning records", ea.provider_id
+            )
 
         normalized_count = 0
         inserted_count = 0
@@ -61,9 +79,13 @@ async def run(db: Session) -> None:
                         effective_from=raw_meta.get("effective_from"),
                         effective_to=raw_meta.get("effective_to"),
                         geometry=None,
-                        related_station_ids=raw_meta.get("related_station_ids"),
-                        related_reach_ids=raw_meta.get("related_reach_ids"),
-                        raw_payload=payload.get("raw_payload"),
+                        related_station_ids=make_json_safe(
+                            raw_meta.get("related_station_ids")
+                        ),
+                        related_reach_ids=make_json_safe(
+                            raw_meta.get("related_reach_ids")
+                        ),
+                        raw_payload=make_json_safe(payload.get("raw_payload")),
                         ingested_at=utcnow(),
                     )
                 )
@@ -77,12 +99,25 @@ async def run(db: Session) -> None:
             except Exception as exc:
                 run_state.records_failed += 1
                 run_state.error_summary = f"normalize_warning failed: {exc!r}"[:4000]
-                logger.warning("warning normalization failed for %s: %s", ea.provider_id, exc)
+                logger.warning(
+                    "warning normalization failed for %s: %s", ea.provider_id, exc
+                )
 
         if raw_count > 0 and normalized_count == 0:
-            logger.warning("sync_warnings provider=%s normalized zero warnings from non-zero fetch", ea.provider_id)
-        if raw_count > 0 and inserted_count == 0 and updated_count == 0 and run_state.records_failed == 0:
-            logger.warning("sync_warnings provider=%s had non-zero fetch but no inserted/updated rows", ea.provider_id)
+            logger.warning(
+                "sync_warnings provider=%s normalized zero warnings from non-zero fetch",
+                ea.provider_id,
+            )
+        if (
+            raw_count > 0
+            and inserted_count == 0
+            and updated_count == 0
+            and run_state.records_failed == 0
+        ):
+            logger.warning(
+                "sync_warnings provider=%s had non-zero fetch but no inserted/updated rows",
+                ea.provider_id,
+            )
 
         logger.info(
             "sync_warnings provider=%s raw=%s normalized=%s inserted=%s updated=%s failed=%s",

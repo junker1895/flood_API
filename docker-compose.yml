@@ -13,6 +13,14 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+  migrate:
+    build: .
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/hydrology
+    depends_on:
+      db:
+        condition: service_healthy
   api:
     build:
       context: .
@@ -20,8 +28,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/hydrology
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
   worker:
@@ -31,5 +39,5 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/hydrology
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
