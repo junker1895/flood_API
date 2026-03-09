@@ -1,0 +1,1417 @@
+Global Hydrology Feed System — Full Build Specification
+1. Objective
+
+Build a standalone global hydrology data feed platform that ingests river gauge observations and modeled river flows from multiple upstream providers, normalizes them into a consistent global schema, stores both normalized and raw payloads, and exposes them through a clean REST API.
+
+This system is infrastructure only. It is not a frontend, dashboard, or map app.
+
+The platform must support:
+
+real observed river gauges
+
+modeled river reaches
+
+latest observations
+
+historical timeseries
+
+thresholds
+
+warnings
+
+provenance
+
+raw payload retention
+
+global geographic querying
+
+future provider expansion
+
+2. Design Principles
+2.1 Source separation
+
+Never mix observed and modeled data semantically.
+
+Required distinction:
+
+source_type = observed
+
+source_type = modeled
+
+Modeled discharge must never be returned as if it were a gauge reading.
+
+2.2 Canonical normalization
+
+Every upstream provider may use different:
+
+identifiers
+
+property names
+
+units
+
+timestamps
+
+quality codes
+
+geometries
+
+station metadata conventions
+
+The platform must translate these into one internal schema while preserving original payloads.
+
+2.3 Provenance preservation
+
+Every normalized record must be traceable back to:
+
+provider
+
+provider object ID
+
+raw payload
+
+ingestion timestamp
+
+normalization version
+
+2.4 Idempotent ingestion
+
+All sync jobs must be safe to rerun.
+Use UPSERT patterns and deterministic keys.
+
+2.5 Global scalability
+
+The system must support:
+
+tens of thousands of observed stations
+
+millions of modeled reaches
+
+high-frequency polling
+
+partitioned historical storage
+
+provider-by-provider expansion
+
+3. Recommended Technical Stack
+3.1 Core stack
+
+Python for ingestion services
+
+PostgreSQL for storage
+
+PostGIS recommended for geometry and bbox queries
+
+FastAPI for REST API
+
+SQLAlchemy or SQLModel for ORM/data access
+
+Alembic for migrations
+
+Redis optional for caching and job locks
+
+APScheduler, Celery, Arq, or cron-based containers for scheduling
+
+Docker Compose for local orchestration
+
+object storage optional for archival raw dumps
+
+3.2 Services
+
+Suggested service split:
+
+ingest-worker
+
+api-service
+
+scheduler
+
+postgres
+
+redis optional
+
+4. Logical Architecture
+External Provider APIs
+    ↓
+Provider Adapters
+    ↓
+Normalization / Validation Layer
+    ↓
+PostgreSQL / PostGIS
+    ↓
+REST API
+    ↓
+Downstream apps
+5. Domain Model
+
+You should treat the platform as four main domains:
+
+provider registry
+
+entities
+
+observed stations
+
+modeled reaches
+
+measurements
+
+latest
+
+timeseries
+
+hydrologic context
+
+thresholds
+
+warnings
+
+6. Canonical Vocabulary
+6.1 Source types
+
+Allowed values:
+
+observed
+
+modeled
+
+6.2 Waterbody types
+
+Allowed values:
+
+river
+
+stream
+
+creek
+
+canal
+
+reservoir
+
+lake
+
+estuary
+
+unknown
+
+6.3 Properties
+
+Full supported vocabulary:
+
+discharge
+
+stage
+
+water_level
+
+storage
+
+velocity
+
+rainfall
+
+temperature
+
+snow_water_equivalent
+
+reservoir_storage
+
+reservoir_elevation
+
+Initial implementation must focus on:
+
+discharge
+
+stage
+
+6.4 Aggregation types
+
+Allowed values:
+
+instantaneous
+
+mean
+
+min
+
+max
+
+sum
+
+unknown
+
+6.5 Quality codes
+
+Normalized quality vocabulary:
+
+verified
+
+provisional
+
+estimated
+
+raw
+
+missing
+
+flagged
+
+forecast
+
+unknown
+
+Boolean flags:
+
+is_provisional
+
+is_estimated
+
+is_missing
+
+is_forecast
+
+is_flagged
+
+7. Canonical Units
+
+Store both native and canonical values.
+
+Canonical standards:
+
+discharge → m3/s
+
+stage → m
+
+water_level → m
+
+storage → m3
+
+reservoir_storage → m3
+
+reservoir_elevation → m
+
+rainfall → mm
+
+velocity → m/s
+
+temperature → degC
+
+7.1 Unit conversion requirements
+
+Implement a centralized conversion library, not provider-specific ad hoc math.
+
+Examples:
+
+ft3/s → m3/s
+
+kcfs → m3/s
+
+ft → m
+
+cm → m
+
+ML or acre-ft → m3
+
+If conversion is ambiguous, store:
+
+native value
+
+native unit
+
+canonical as null
+
+conversion status = failed
+
+8. Database Schema
+8.1 providers
+providers (
+  provider_id text primary key,
+  name text not null,
+  provider_type text not null, -- observed | modeled | discovery | warning
+  home_url text,
+  api_base_url text,
+  license_name text,
+  license_url text,
+  attribution_text text,
+  default_poll_interval_minutes integer,
+  status text not null, -- active | degraded | disabled | planned
+  auth_type text, -- none | api_key | oauth2 | basic | custom
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+)
+8.2 stations
+stations (
+  station_id text primary key,
+  provider_id text not null references providers(provider_id),
+  source_type text not null,
+  provider_station_id text not null,
+  provider_station_code text,
+  name text,
+  river_name text,
+  waterbody_type text,
+  country_code text,
+  admin1 text,
+  admin2 text,
+  latitude double precision not null,
+  longitude double precision not null,
+  elevation_m double precision,
+  timezone text,
+  station_status text, -- active | inactive | seasonal | discontinued | unknown
+  observed_properties jsonb not null default '[]'::jsonb,
+  canonical_primary_property text,
+  flow_unit_native text,
+  stage_unit_native text,
+  flow_unit_canonical text,
+  stage_unit_canonical text,
+  drainage_area_km2 double precision,
+  datum_name text,
+  datum_vertical_reference text,
+  first_seen_at timestamptz not null default now(),
+  last_metadata_refresh_at timestamptz,
+  last_seen_at timestamptz,
+  geom geometry(Point, 4326),
+  raw_metadata jsonb not null,
+  normalization_version text,
+  unique(provider_id, provider_station_id)
+)
+
+Recommended indexes:
+
+(provider_id)
+
+(country_code)
+
+(source_type)
+
+GIST on geom
+
+GIN on observed_properties
+
+8.3 reaches
+reaches (
+  reach_id text primary key,
+  provider_id text not null references providers(provider_id),
+  source_type text not null,
+  provider_reach_id text not null,
+  name text,
+  river_name text,
+  country_code text,
+  latitude double precision,
+  longitude double precision,
+  network_name text,
+  geometry_type text,
+  geom geometry,
+  raw_metadata jsonb not null,
+  normalization_version text,
+  first_seen_at timestamptz not null default now(),
+  last_metadata_refresh_at timestamptz,
+  unique(provider_id, provider_reach_id)
+)
+8.4 observation_latest
+
+Use one table for both stations and reaches, but exactly one of station_id or reach_id must be populated.
+
+observation_latest (
+  entity_type text not null, -- station | reach
+  station_id text references stations(station_id),
+  reach_id text references reaches(reach_id),
+  property text not null,
+  observed_at timestamptz not null,
+  value_native double precision,
+  unit_native text,
+  value_canonical double precision,
+  unit_canonical text,
+  quality_code text,
+  quality_score double precision,
+  aggregation text,
+  is_provisional boolean not null default false,
+  is_estimated boolean not null default false,
+  is_missing boolean not null default false,
+  is_forecast boolean not null default false,
+  is_flagged boolean not null default false,
+  provider_observation_id text,
+  ingested_at timestamptz not null default now(),
+  raw_payload jsonb not null,
+  primary key (entity_type, coalesce(station_id, ''), coalesce(reach_id, ''), property)
+)
+
+In practice, PostgreSQL primary keys can’t use coalesce directly like that in a straightforward table definition, so implement with:
+
+surrogate latest_id primary key, and
+
+unique partial indexes:
+
+unique on (station_id, property) where station_id is not null
+
+unique on (reach_id, property) where reach_id is not null
+
+That is the cleaner implementation.
+
+8.5 observation_timeseries
+
+Use time partitioning by month or quarter.
+
+observation_timeseries (
+  entity_type text not null, -- station | reach
+  station_id text references stations(station_id),
+  reach_id text references reaches(reach_id),
+  property text not null,
+  observed_at timestamptz not null,
+  value_native double precision,
+  unit_native text,
+  value_canonical double precision,
+  unit_canonical text,
+  quality_code text,
+  aggregation text,
+  is_provisional boolean not null default false,
+  is_estimated boolean not null default false,
+  is_missing boolean not null default false,
+  is_forecast boolean not null default false,
+  is_flagged boolean not null default false,
+  provider_observation_id text,
+  ingested_at timestamptz not null default now(),
+  raw_payload jsonb not null
+) partition by range (observed_at);
+
+Unique indexes:
+
+(station_id, property, observed_at) where station_id is not null
+
+(reach_id, property, observed_at) where reach_id is not null
+
+8.6 thresholds
+thresholds (
+  threshold_id text primary key,
+  entity_type text not null, -- station | reach
+  station_id text references stations(station_id),
+  reach_id text references reaches(reach_id),
+  property text not null,
+  threshold_type text not null,
+  threshold_label text,
+  severity_rank integer,
+  value_native double precision,
+  unit_native text,
+  value_canonical double precision,
+  unit_canonical text,
+  effective_from timestamptz,
+  effective_to timestamptz,
+  source text, -- official | derived | custom
+  method text, -- percentile | provider | manual | rating_curve
+  raw_payload jsonb not null,
+  created_at timestamptz not null default now()
+)
+8.7 warning_events
+warning_events (
+  warning_id text primary key,
+  provider_id text not null references providers(provider_id),
+  country_code text,
+  warning_type text,
+  severity text,
+  title text,
+  description text,
+  issued_at timestamptz,
+  effective_from timestamptz,
+  effective_to timestamptz,
+  geometry geometry,
+  related_station_ids jsonb not null default '[]'::jsonb,
+  related_reach_ids jsonb not null default '[]'::jsonb,
+  status text, -- active | expired | cancelled | unknown
+  raw_payload jsonb not null,
+  ingested_at timestamptz not null default now()
+)
+8.8 ingestion_runs
+
+Track job health.
+
+ingestion_runs (
+  run_id uuid primary key,
+  provider_id text not null,
+  job_type text not null, -- metadata | latest | historical | thresholds | warnings
+  started_at timestamptz not null,
+  finished_at timestamptz,
+  status text not null, -- running | success | partial | failed
+  records_seen integer default 0,
+  records_inserted integer default 0,
+  records_updated integer default 0,
+  records_failed integer default 0,
+  error_summary text,
+  metadata jsonb not null default '{}'::jsonb
+)
+8.9 raw_ingest_archive
+
+Optional but very useful.
+
+raw_ingest_archive (
+  archive_id uuid primary key,
+  provider_id text not null,
+  job_type text not null,
+  fetched_at timestamptz not null default now(),
+  source_url text,
+  payload jsonb,
+  payload_hash text
+)
+9. ID Strategy
+9.1 Station IDs
+
+Generate deterministic IDs:
+
+{provider_id}-{provider_station_id}
+
+Examples:
+
+usgs-01646500
+
+ea-E12345
+
+bom-410061
+
+Only change this if an upstream ID is unstable.
+
+9.2 Reach IDs
+{provider_id}-{provider_reach_id}
+
+Examples:
+
+geoglows-1234567
+
+9.3 Threshold IDs
+
+Use stable hash:
+
+sha256(provider/entity/property/type/effective_from/value)
+9.4 Warning IDs
+
+Prefer upstream warning ID.
+Fallback to stable hash on provider + issue time + area + title.
+
+10. Provider Adapter Contract
+
+Every adapter must implement a common interface.
+
+class BaseHydrologyAdapter(ABC):
+    provider_id: str
+    source_type: str
+
+    def fetch_station_catalog(self) -> Iterable[dict]:
+        ...
+
+    def normalize_station(self, raw: dict) -> NormalizedStation:
+        ...
+
+    def fetch_latest_observations(self) -> Iterable[dict]:
+        ...
+
+    def normalize_observation(self, raw: dict) -> list[NormalizedObservation]:
+        ...
+
+    def fetch_historical_timeseries(self, entity_id: str, start: datetime, end: datetime) -> Iterable[dict]:
+        ...
+
+    def fetch_thresholds(self) -> Iterable[dict]:
+        ...
+
+    def normalize_threshold(self, raw: dict) -> NormalizedThreshold:
+        ...
+
+    def fetch_warnings(self) -> Iterable[dict]:
+        ...
+
+    def normalize_warning(self, raw: dict) -> NormalizedWarning:
+        ...
+11. Initial Provider Implementations
+11.1 USGS adapter
+
+Use USGS for observed U.S. stations and timeseries.
+
+USGS Water Services supports:
+
+site metadata
+
+instantaneous values
+
+daily values
+
+JSON/XML/tabular outputs, and the newer USGS Water Data APIs expose OGC-compliant interfaces for monitoring locations and time series.
+
+Initial implementation:
+
+metadata from site service or OGC monitoring locations
+
+latest discharge and stage from instantaneous values
+
+historical backfill from daily values and, where needed, IV series
+
+parameter-code mapping to canonical properties
+
+Canonical mappings:
+
+discharge: USGS streamflow parameter → discharge
+
+gage height: → stage
+
+Important:
+
+preserve USGS qualification/provisional indicators
+
+store datum metadata where available
+
+do not assume all sites are rivers; filter to stream/river-relevant stations
+
+11.2 Environment Agency adapter
+
+Environment Agency real-time API exposes:
+
+flood warnings
+
+flood areas
+
+water levels and flows
+
+station metadata
+
+measures and readings, and the docs explicitly recommend polling the single latest readings endpoint every 15 minutes rather than station-by-station crawling.
+
+Hydrology API provides:
+
+historic and recent hydrological data
+
+near 8,000 monitoring stations
+
+15-minute and daily flow/level series
+
+quality-checked archives.
+
+Initial implementation:
+
+metadata from station endpoints
+
+latest readings from real-time API
+
+warnings from flood-monitoring warning endpoints
+
+historical archives from hydrology API
+
+Canonical mapping:
+
+level → stage
+
+flow → discharge
+
+11.3 GEOGLOWS adapter
+
+GEOGLOWS should populate modeled river reaches, not stations.
+
+Use it for:
+
+global modeled reach metadata
+
+retrospective discharge
+
+forecast discharge
+
+return periods / threshold-like modeled context
+
+GEOGLOWS provides forecast and retrospective streamflow services and advises using REST only for small request volumes, with AWS/S3 for larger-scale access.
+
+Implementation rules:
+
+source_type = modeled
+
+entity stored in reaches, not stations
+
+forecast rows must have is_forecast = true
+
+never expose GEOGLOWS modeled flows in station endpoints
+
+11.4 WHOS adapter
+
+WHOS should initially be used for:
+
+provider discovery
+
+metadata enrichment
+
+future pipeline seeding
+
+Do not treat WHOS as a uniform observational feed. WHOS is a brokering/discovery framework linking national hydrological services and interoperable data services.
+
+Implementation:
+
+optional discovery crawler
+
+registry enrichment
+
+candidate-provider seeding table
+
+12. Ingestion Workflows
+12.1 Metadata sync
+
+Frequency:
+
+daily by default
+
+weekly for slower providers if needed
+
+Steps:
+
+fetch provider catalog
+
+normalize entity metadata
+
+upsert stations or reaches
+
+update last_metadata_refresh_at
+
+mark previously known entities inactive if absent for repeated syncs
+
+archive raw fetch payload
+
+Rules:
+
+never hard-delete entities
+
+use status transitions:
+
+active
+
+inactive
+
+discontinued
+
+unknown
+
+12.2 Latest observation sync
+
+Frequency:
+
+every 5–15 minutes depending on provider cadence
+
+Steps:
+
+fetch latest values
+
+normalize timestamps
+
+normalize property names
+
+convert units
+
+normalize quality flags
+
+UPSERT into observation_latest
+
+append to observation_timeseries
+
+deduplicate same-timestamp replays
+
+Deduping key:
+
+entity + property + observed_at + provider_observation_id if available
+
+12.3 Historical sync
+
+Two modes:
+
+backfill
+
+rolling repair
+
+Backfill:
+
+when a new provider or entity is added
+
+Rolling repair:
+
+last 1–7 days to pick up delayed revisions
+
+This matters because some providers revise historical readings after initial publication; EA explicitly notes that the latest-only polling pattern is not sufficient for a complete historical trace, and recommends using since style historical retrieval for completeness.
+
+12.4 Threshold sync
+
+Frequency:
+
+daily or weekly
+
+Steps:
+
+fetch official thresholds where available
+
+normalize severity taxonomy
+
+convert units
+
+store as versioned threshold rows
+
+12.5 Warning sync
+
+Frequency:
+
+every 5–15 minutes
+
+Steps:
+
+fetch active warnings
+
+normalize severity and status
+
+store geometry if available
+
+link to nearby or declared stations
+
+close expired warnings when no longer active
+
+13. Derived Thresholds
+
+When official thresholds are absent, create derived thresholds from historical distributions.
+
+Method:
+
+require minimum historical coverage
+
+compute percentiles on canonical values
+
+exclude missing/flagged/forecast records
+
+preferably compute by day-of-year seasonal window for strong seasonality
+
+optionally compute all-time and seasonal variants
+
+Initial derived types:
+
+derived_p50
+
+derived_p75
+
+derived_p90
+
+derived_p95
+
+derived_p99
+
+Recommended minimum data rule:
+
+at least 1 year of usable data for crude percentiles
+
+3+ years preferred
+
+mark low-confidence derived thresholds explicitly
+
+Store:
+
+method
+
+sample size
+
+date range used
+
+exclusion rules
+
+14. Quality Normalization Rules
+
+Use provider-specific mapping tables.
+
+Example logic:
+
+USGS provisional indicators → provisional
+
+modeled forecasts → forecast
+
+null reading or known no-data code → missing
+
+suspect/flagged provider code → flagged
+
+Also store:
+
+provider raw code
+
+normalized code
+
+optional numeric quality score from 0 to 1
+
+15. API Design
+
+Use versioned REST:
+
+/v1/providers
+
+/v1/stations
+
+/v1/reaches
+
+/v1/warnings
+
+15.1 Endpoints
+Providers
+
+GET /v1/providers
+
+GET /v1/providers/{provider_id}
+
+Stations
+
+GET /v1/stations
+
+GET /v1/stations/{station_id}
+
+GET /v1/stations/latest
+
+GET /v1/stations/{station_id}/timeseries
+
+GET /v1/stations/{station_id}/thresholds
+
+Filters:
+
+bbox=minLon,minLat,maxLon,maxLat
+
+country_code=US
+
+provider_id=usgs
+
+property=discharge
+
+source_type=observed
+
+updated_since=...
+
+ids=id1,id2,id3
+
+Reaches
+
+GET /v1/reaches
+
+GET /v1/reaches/{reach_id}
+
+GET /v1/reaches/latest
+
+GET /v1/reaches/{reach_id}/timeseries
+
+GET /v1/reaches/{reach_id}/thresholds
+
+Warnings
+
+GET /v1/warnings
+
+GET /v1/warnings/active
+
+15.2 Response shape
+
+Use consistent envelope:
+
+{
+  "data": [...],
+  "meta": {
+    "count": 123,
+    "next_cursor": null
+  }
+}
+15.3 Example station latest response
+{
+  "data": [
+    {
+      "station_id": "usgs-01646500",
+      "provider_id": "usgs",
+      "source_type": "observed",
+      "name": "Potomac River near Washington, DC",
+      "river_name": "Potomac River",
+      "country_code": "US",
+      "location": {
+        "lat": 38.9498,
+        "lon": -77.1276
+      },
+      "properties": {
+        "discharge": {
+          "observed_at": "2026-03-09T02:45:00Z",
+          "value": 515.3,
+          "unit": "m3/s",
+          "native_value": 18200,
+          "native_unit": "ft3/s",
+          "quality_code": "provisional",
+          "is_provisional": true,
+          "provenance": {
+            "provider_id": "usgs",
+            "provider_observation_id": "example-id"
+          }
+        },
+        "stage": {
+          "observed_at": "2026-03-09T02:45:00Z",
+          "value": 2.87,
+          "unit": "m",
+          "native_value": 9.42,
+          "native_unit": "ft",
+          "quality_code": "provisional",
+          "is_provisional": true
+        }
+      }
+    }
+  ],
+  "meta": {
+    "count": 1
+  }
+}
+16. Spatial Query Design
+
+If using PostGIS:
+
+store points in geom
+
+use GIST indexes
+
+support bbox search with ST_Intersects
+
+warning polygons can be stored in geometry column
+
+reaches can later use LineString or representative point
+
+For non-PostGIS fallback:
+
+keep lat/lon columns
+
+do bbox filtering numerically
+
+PostGIS is worth using.
+
+17. Partitioning and Performance
+17.1 Partition timeseries
+
+Partition observation_timeseries by month or quarter.
+
+Why:
+
+faster retention management
+
+better vacuuming
+
+better historical query performance
+
+17.2 Index strategy
+
+Timeseries:
+
+(station_id, property, observed_at desc)
+
+(reach_id, property, observed_at desc)
+
+Latest:
+
+(station_id)
+
+(reach_id)
+
+(property)
+
+Stations:
+
+GIST on geom
+
+(provider_id, provider_station_id)
+
+(country_code)
+
+Warnings:
+
+GIST on geometry
+
+(status, effective_to)
+
+17.3 API pagination
+
+Use cursor pagination, not offset, for large result sets.
+
+18. Data Validation Rules
+
+Reject or quarantine records when:
+
+lat/lon invalid
+
+timestamp invalid
+
+property unmapped
+
+unit unmapped
+
+observed value impossible by configured sanity rules
+
+duplicate provider IDs with inconsistent metadata
+
+Soft sanity checks:
+
+negative discharge usually flagged, not always rejected
+
+absurd stage spikes flagged
+
+future timestamps flagged unless forecast
+
+19. Error Handling and Resilience
+
+Each adapter job must support:
+
+retries with backoff
+
+rate-limit awareness
+
+partial success
+
+checkpointing
+
+job-level metrics
+
+raw payload archiving
+
+Never let one provider failure block others.
+
+20. Observability
+
+Emit metrics:
+
+provider sync duration
+
+records ingested
+
+records rejected
+
+API latency
+
+stale provider age
+
+latest observation freshness by provider
+
+Useful health endpoints:
+
+/health/live
+
+/health/ready
+
+/health/providers
+
+Provider health response should include:
+
+last metadata sync
+
+last latest sync
+
+last warning sync
+
+status
+
+error count
+
+21. Security and Governance
+
+Because this is a backend data platform:
+
+secrets in env vars
+
+no hardcoded tokens
+
+provider auth abstraction
+
+rate limiting on public API
+
+usage logging
+
+optional API keys for downstream consumers
+
+Also store provider licensing metadata and attribution because upstream obligations vary. EA’s flood-monitoring API is published under the Open Government Licence and requires attribution. USGS OGC APIs can use API keys via api.data.gov to raise rate limits, though anonymous use still exists for many endpoints.
+
+22. Suggested Repository Structure
+global-hydrology-feed/
+  app/
+    api/
+      routes/
+      schemas/
+      dependencies.py
+    core/
+      config.py
+      logging.py
+      units.py
+      quality.py
+      enums.py
+    db/
+      models/
+      session.py
+      migrations/
+    adapters/
+      base.py
+      usgs.py
+      ea_england.py
+      geoglows.py
+      whos.py
+    ingestion/
+      jobs/
+        sync_metadata.py
+        sync_latest.py
+        sync_history.py
+        sync_thresholds.py
+        sync_warnings.py
+      orchestration.py
+    services/
+      station_service.py
+      reach_service.py
+      warning_service.py
+      threshold_service.py
+    tests/
+  docker/
+  docker-compose.yml
+  pyproject.toml
+  README.md
+23. MVP Scope
+
+Build this in phases.
+
+Phase 1
+
+PostgreSQL schema
+
+provider registry
+
+stations table
+
+reaches table
+
+latest observations
+
+historical timeseries
+
+USGS adapter
+
+Environment Agency adapter
+
+GEOGLOWS adapter
+
+basic FastAPI endpoints
+
+bbox filtering
+
+unit conversion
+
+quality normalization
+
+Phase 2
+
+warnings
+
+thresholds
+
+derived percentiles
+
+scheduler
+
+health endpoints
+
+ingestion metrics
+
+historical backfill jobs
+
+Phase 3
+
+WHOS discovery support
+
+more national providers
+
+forecast-specific endpoints
+
+bulk exports
+
+downstream auth and quotas
+
+24. Non-Negotiable Implementation Rules
+
+observed and modeled must remain separate in both storage and API responses
+
+every normalized record must retain raw upstream payload
+
+canonical units must always be stored when conversion is possible
+
+latest sync must also append to historical store
+
+provider adapters must be isolated modules
+
+time series must be idempotent and deduplicated
+
+warnings and thresholds must be versioned, not overwritten destructively
+
+station and reach metadata must never be silently discarded
+
+the API must expose provenance fields
+
+all provider-specific logic must stay out of the API layer
+
+25. Recommended Normalized Pydantic Models
+class NormalizedStation(BaseModel):
+    station_id: str
+    provider_id: str
+    source_type: Literal["observed"]
+    provider_station_id: str
+    name: str | None
+    river_name: str | None
+    waterbody_type: str | None
+    country_code: str | None
+    admin1: str | None
+    admin2: str | None
+    latitude: float
+    longitude: float
+    elevation_m: float | None
+    timezone: str | None
+    station_status: str | None
+    observed_properties: list[str]
+    canonical_primary_property: str | None
+    flow_unit_native: str | None
+    stage_unit_native: str | None
+    drainage_area_km2: float | None
+    datum_name: str | None
+    datum_vertical_reference: str | None
+    raw_metadata: dict
+class NormalizedReach(BaseModel):
+    reach_id: str
+    provider_id: str
+    source_type: Literal["modeled"]
+    provider_reach_id: str
+    name: str | None
+    river_name: str | None
+    country_code: str | None
+    latitude: float | None
+    longitude: float | None
+    network_name: str | None
+    geometry_type: str | None
+    raw_metadata: dict
+class NormalizedObservation(BaseModel):
+    entity_type: Literal["station", "reach"]
+    station_id: str | None = None
+    reach_id: str | None = None
+    property: str
+    observed_at: datetime
+    value_native: float | None
+    unit_native: str | None
+    value_canonical: float | None
+    unit_canonical: str | None
+    quality_code: str = "unknown"
+    aggregation: str = "instantaneous"
+    is_provisional: bool = False
+    is_estimated: bool = False
+    is_missing: bool = False
+    is_forecast: bool = False
+    is_flagged: bool = False
+    provider_observation_id: str | None = None
+    raw_payload: dict
+26. Final Recommendation
+
+The cleanest production architecture is:
+
+observed gauges: USGS + Environment Agency first
+
+modeled reaches: GEOGLOWS first
+
+discovery layer: WHOS for future provider expansion
+
+database: PostgreSQL + PostGIS
+
+API: FastAPI
+
+jobs: separate scheduled ingestion tasks
+
+history: partitioned timeseries tables
+
+normalization: central unit, quality, and vocabulary libraries
+
+That design matches how the upstream systems are actually exposed today: EA splits near-real-time monitoring from historical hydrology archives, GEOGLOWS separates small-request REST access from bulk download workflows, USGS is in a migration period with both Water Services and newer OGC APIs, and WHOS functions as an interoperability/discovery framework rather than a single gauge feed.
