@@ -70,7 +70,20 @@ class FakeEAAdapter:
     provider_id = "ea_england"
 
     async def fetch_station_catalog(self):
-        return []
+        return [{"notation": "A1"}]
+
+    def normalize_station(self, raw):
+        from app.adapters.base import NormalizedStation
+
+        return NormalizedStation(
+            station_id="ea_england-A1",
+            provider_id="ea_england",
+            provider_station_id="A1",
+            name="EA Station",
+            latitude=52.845991,
+            longitude=-0.100848,
+            raw_metadata=raw,
+        )
 
 
 class FakeGeoglowsAdapter:
@@ -99,7 +112,7 @@ def _patch_adapters(monkeypatch):
     monkeypatch.setattr(sync_metadata, "GeoglowsAdapter", lambda: FakeGeoglowsAdapter())
 
 
-def test_sync_metadata_populates_station_geom_and_lon_lat_order(monkeypatch):
+def test_sync_metadata_populates_station_geom_for_all_providers(monkeypatch):
     db = FakeDB()
     _patch_adapters(monkeypatch)
 
@@ -107,10 +120,15 @@ def test_sync_metadata_populates_station_geom_and_lon_lat_order(monkeypatch):
 
     asyncio.run(sync_metadata.run(db))
 
-    station = db.stations["usgs-01646500"]
-    assert station.geom is not None
-    assert station.geom.srid == 4326
-    assert station.geom.data == "POINT(-1.1 51.1)"
+    usgs = db.stations["usgs-01646500"]
+    assert usgs.geom is not None
+    assert usgs.geom.srid == 4326
+    assert usgs.geom.data == "POINT(-1.1 51.1)"
+
+    ea = db.stations["ea_england-A1"]
+    assert ea.geom is not None
+    assert ea.geom.srid == 4326
+    assert ea.geom.data == "POINT(-0.100848 52.845991)"
 
 
 def test_sync_metadata_populates_reach_point_fallback_geom(monkeypatch):
@@ -134,16 +152,16 @@ def test_sync_metadata_rerun_backfills_existing_missing_geom(monkeypatch):
     import asyncio
 
     asyncio.run(sync_metadata.run(db))
-    db.stations["usgs-01646500"].geom = None
+    db.stations["ea_england-A1"].geom = None
     db.reaches["geoglows-1001"].geom = None
 
     asyncio.run(sync_metadata.run(db))
 
-    assert db.stations["usgs-01646500"].geom is not None
+    assert db.stations["ea_england-A1"].geom is not None
     assert db.reaches["geoglows-1001"].geom is not None
 
 
-def test_station_bbox_envelope_contains_synced_station_point(monkeypatch):
+def test_station_bbox_envelope_contains_synced_station_points(monkeypatch):
     db = FakeDB()
     _patch_adapters(monkeypatch)
 
@@ -151,10 +169,11 @@ def test_station_bbox_envelope_contains_synced_station_point(monkeypatch):
 
     asyncio.run(sync_metadata.run(db))
 
-    geom_text = db.stations["usgs-01646500"].geom.data
-    lon, lat = (float(part) for part in geom_text.removeprefix("POINT(").removesuffix(")").split())
-    assert -10 <= lon <= 3
-    assert 49 <= lat <= 61
+    for sid in ["usgs-01646500", "ea_england-A1"]:
+        geom_text = db.stations[sid].geom.data
+        lon, lat = (float(part) for part in geom_text.removeprefix("POINT(").removesuffix(")").split())
+        assert -10 <= lon <= 3
+        assert 49 <= lat <= 61
 
 
 def test_sync_metadata_preserves_reach_linestring_geometry_when_available(monkeypatch):
@@ -183,3 +202,50 @@ def test_sync_metadata_preserves_reach_linestring_geometry_when_available(monkey
     asyncio.run(sync_metadata.run(db))
 
     assert db.reaches["geoglows-1001"].geom.data == "LINESTRING(-0.12 51.5, -0.11 51.6)"
+
+
+def test_sync_metadata_module_main_executes_job(monkeypatch):
+    events = []
+
+    class FakeSessionContext:
+        def __enter__(self):
+            events.append("enter")
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("exit")
+
+    async def fake_run(_db):
+        events.append("run")
+
+    monkeypatch.setattr(sync_metadata, "SessionLocal", lambda: FakeSessionContext())
+    monkeypatch.setattr(sync_metadata, "run", fake_run)
+
+    sync_metadata.main()
+
+    assert events == ["enter", "run", "exit"]
+
+
+def test_ensure_providers_ignores_duplicate_insert_race(monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    class FakeDBProviderRace(FakeDB):
+        def __init__(self):
+            super().__init__()
+            self.flush_calls = 0
+            self.rollback_calls = 0
+
+        def flush(self):
+            self.flush_calls += 1
+            if self.flush_calls == 1:
+                raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+    db = FakeDBProviderRace()
+
+    created = sync_metadata._ensure_providers(db)
+
+    assert created == 3
+    assert db.rollback_calls == 1

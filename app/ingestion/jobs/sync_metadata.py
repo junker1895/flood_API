@@ -1,7 +1,9 @@
+import asyncio
 import logging
 
 import httpx
 from geoalchemy2 import WKTElement
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adapters.ea_england import EAEnglandAdapter
@@ -10,6 +12,7 @@ from app.adapters.usgs import USGSAdapter
 from app.core.time import utcnow
 from app.db.geometry import point_geom_from_latlon
 from app.db.models import Provider, Reach, Station
+from app.db.session import SessionLocal
 from app.services.ingestion_service import tracked_run
 from app.services.provider_registry import build_provider
 
@@ -20,11 +23,17 @@ def _ensure_providers(db: Session) -> int:
     created = 0
     for provider_id in ["usgs", "ea_england", "geoglows", "whos"]:
         existing = db.get(Provider, provider_id)
-        if existing is None:
-            db.add(build_provider(provider_id))
+        if existing is not None:
+            continue
+
+        db.add(build_provider(provider_id))
+        try:
+            db.flush()
             created += 1
-    if created:
-        db.flush()
+        except IntegrityError:
+            if hasattr(db, "rollback"):
+                db.rollback()
+            logger.info("provider already exists during ensure_providers: provider_id=%s", provider_id)
     return created
 
 
@@ -129,3 +138,12 @@ async def run(db: Session) -> None:
 
     db.commit()
     logger.info("sync_metadata committed")
+
+
+def main() -> None:
+    with SessionLocal() as db:
+        asyncio.run(run(db))
+
+
+if __name__ == "__main__":
+    main()
