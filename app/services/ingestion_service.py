@@ -1,17 +1,18 @@
 from contextlib import contextmanager
 
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.adapters.base import NormalizedObservation
 from app.core.enums import EntityType
 from app.core.time import utcnow
-from app.db.models import IngestionRun, ObservationLatest, ObservationTimeseries
+from app.db.models import IngestionRun, ObservationLatest, ObservationTimeseries, Reach, Station
 
 
 @contextmanager
 def tracked_run(db: Session, provider_id: str, job_type: str):
+    if not db.is_active:
+        db.rollback()
     run = IngestionRun(
         provider_id=provider_id,
         job_type=job_type,
@@ -87,12 +88,22 @@ def _timeseries_insert_stmt(payload: dict):
     )
 
 
+def _entity_exists(db: Session, obs: NormalizedObservation) -> bool:
+    if obs.entity_type == EntityType.STATION:
+        return bool(obs.station_id and db.get(Station, obs.station_id))
+    if obs.entity_type == EntityType.REACH:
+        return bool(obs.reach_id and db.get(Reach, obs.reach_id))
+    return False
+
+
 def upsert_latest_and_append_ts(db: Session, obs: NormalizedObservation) -> tuple[int, int]:
+    if not _entity_exists(db, obs):
+        raise ValueError(f"entity missing for observation: station_id={obs.station_id} reach_id={obs.reach_id}")
+
     payload = obs.model_dump()
     payload["ingested_at"] = utcnow()
 
     latest_result = db.execute(_latest_upsert_stmt(payload))
-    # rowcount can be 1 for insert/update; keep semantics simple for run counters
     updated = 1 if latest_result.rowcount else 0
 
     ts_result = db.execute(_timeseries_insert_stmt(payload))
