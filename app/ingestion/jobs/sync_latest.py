@@ -42,9 +42,14 @@ async def _enrich_ea_station_if_missing(db: Session, adapter: EAEnglandAdapter, 
 
     station = adapter.normalize_station(station_raw)
     now = utcnow()
+    station_payload = station.model_dump()
+    # EA station detail can use a different notation than measure.stationReference.
+    # Keep IDs aligned to the observation reference to satisfy FK upsert retry.
+    station_payload["station_id"] = sid
+    station_payload["provider_station_id"] = station_ref
     db.merge(
         Station(
-            **station.model_dump(),
+            **station_payload,
             observed_properties={"stage": True},
             canonical_primary_property="stage",
             stage_unit_native=raw.get("unitName"),

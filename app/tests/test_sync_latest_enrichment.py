@@ -123,3 +123,52 @@ async def test_sync_latest_enriches_missing_ea_station_and_retries(monkeypatch):
 
     assert "ea_england-A1" in db.stations
     assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_latest_enrichment_uses_station_reference_for_ids(monkeypatch):
+    db = FakeDB()
+
+    class FakeEAAdapterMismatchedNotation(FakeEAAdapter):
+        async def fetch_latest_observations(self):
+            return [{"stationReference": "E9250", "unitName": "m", "latestReading": {"value": 0.9, "dateTime": datetime.now(UTC).isoformat()}}]
+
+        async def fetch_station_by_reference(self, station_reference: str):
+            # Endpoint payload can return notation without the prefix used by stationReference
+            return {"notation": "9250", "label": "EA Station", "lat": 51.1, "long": -1.2}
+
+        def normalize_station(self, raw):
+            from app.adapters.base import NormalizedStation
+
+            return NormalizedStation(
+                station_id="ea_england-9250",
+                provider_id="ea_england",
+                provider_station_id="9250",
+                name=raw["label"],
+                latitude=raw["lat"],
+                longitude=raw["long"],
+                raw_metadata=raw,
+            )
+
+    ea = FakeEAAdapterMismatchedNotation()
+
+    monkeypatch.setattr(sync_latest, "USGSAdapter", lambda: FakeNoopAdapter("usgs"))
+    monkeypatch.setattr(sync_latest, "EAEnglandAdapter", lambda: ea)
+    monkeypatch.setattr(sync_latest, "GeoglowsAdapter", lambda: FakeNoopAdapter("geoglows"))
+    monkeypatch.setattr(sync_latest, "tracked_run", fake_tracked_run)
+
+    calls = {"count": 0}
+
+    def fake_upsert(_db, obs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ValueError(f"entity missing for observation: station_id={obs.station_id} reach_id=None")
+        return (1, 1)
+
+    monkeypatch.setattr(sync_latest, "upsert_latest_and_append_ts", fake_upsert)
+
+    await sync_latest.run(db)
+
+    assert "ea_england-E9250" in db.stations
+    assert "ea_england-9250" not in db.stations
+    assert calls["count"] == 2
