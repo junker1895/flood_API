@@ -26,7 +26,7 @@ class USGSAdapter(BaseAdapter):
         return bool(line) and not line.startswith("#") and line.split("\t", 1)[0] == "USGS"
 
     async def fetch_station_catalog(self) -> list[dict]:
-        url = "https://waterservices.usgs.gov/nwis/site/?format=rdb&stateCd=co&siteType=ST"
+        url = "https://waterservices.usgs.gov/nwis/site/?format=rdb&sites=01646500&siteType=ST"
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(url)
             r.raise_for_status()
