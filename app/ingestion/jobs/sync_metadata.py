@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import httpx
@@ -10,6 +11,7 @@ from app.adapters.usgs import USGSAdapter
 from app.core.time import utcnow
 from app.db.geometry import point_geom_from_latlon
 from app.db.models import Provider, Reach, Station
+from app.db.session import SessionLocal
 from app.services.ingestion_service import tracked_run
 from app.services.provider_registry import build_provider
 
@@ -129,3 +131,12 @@ async def run(db: Session) -> None:
 
     db.commit()
     logger.info("sync_metadata committed")
+
+
+def main() -> None:
+    with SessionLocal() as db:
+        asyncio.run(run(db))
+
+
+if __name__ == "__main__":
+    main()

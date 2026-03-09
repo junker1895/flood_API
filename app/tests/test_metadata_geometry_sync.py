@@ -202,3 +202,25 @@ def test_sync_metadata_preserves_reach_linestring_geometry_when_available(monkey
     asyncio.run(sync_metadata.run(db))
 
     assert db.reaches["geoglows-1001"].geom.data == "LINESTRING(-0.12 51.5, -0.11 51.6)"
+
+
+def test_sync_metadata_module_main_executes_job(monkeypatch):
+    events = []
+
+    class FakeSessionContext:
+        def __enter__(self):
+            events.append("enter")
+            return object()
+
+        def __exit__(self, exc_type, exc, tb):
+            events.append("exit")
+
+    async def fake_run(_db):
+        events.append("run")
+
+    monkeypatch.setattr(sync_metadata, "SessionLocal", lambda: FakeSessionContext())
+    monkeypatch.setattr(sync_metadata, "run", fake_run)
+
+    sync_metadata.main()
+
+    assert events == ["enter", "run", "exit"]
