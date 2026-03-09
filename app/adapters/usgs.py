@@ -10,6 +10,8 @@ from app.core.units import to_canonical
 
 class USGSAdapter(BaseAdapter):
     provider_id = "usgs"
+    supports_stations = True
+    supports_history = True
 
     async def fetch_station_catalog(self) -> list[dict]:
         url = "https://waterservices.usgs.gov/nwis/site/?format=rdb&stateCd=co&siteType=ST"

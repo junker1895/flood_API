@@ -10,6 +10,8 @@ from app.core.units import to_canonical
 
 class EAEnglandAdapter(BaseAdapter):
     provider_id = "ea_england"
+    supports_stations = True
+    supports_warnings = True
 
     async def fetch_station_catalog(self) -> list[dict]:
         async with httpx.AsyncClient(timeout=20) as client:

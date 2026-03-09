@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,7 +9,25 @@ from app.db.base import Base
 
 class ObservationTimeseries(Base):
     __tablename__ = "observation_timeseries"
-    __table_args__ = (CheckConstraint("(station_id IS NULL) != (reach_id IS NULL)", name="ck_one_entity_ts"),)
+    __table_args__ = (
+        CheckConstraint("(station_id IS NULL) != (reach_id IS NULL)", name="ck_one_entity_ts"),
+        Index(
+            "uq_ts_station_prop_time",
+            "station_id",
+            "property",
+            "observed_at",
+            unique=True,
+            postgresql_where="station_id IS NOT NULL",
+        ),
+        Index(
+            "uq_ts_reach_prop_time",
+            "reach_id",
+            "property",
+            "observed_at",
+            unique=True,
+            postgresql_where="reach_id IS NOT NULL",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     entity_type: Mapped[str] = mapped_column(String, nullable=False)

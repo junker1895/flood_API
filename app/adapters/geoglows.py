@@ -7,6 +7,7 @@ from app.core.quality import normalize_quality
 
 class GeoglowsAdapter(BaseAdapter):
     provider_id = "geoglows"
+    supports_reaches = True
 
     async def fetch_reach_catalog(self) -> list[dict]:
         return [{"reach_id": "1001", "lat": 0.0, "lon": 0.0, "river": "Demo"}]

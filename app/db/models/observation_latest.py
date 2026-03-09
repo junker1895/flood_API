@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,7 +10,11 @@ from app.db.base import Base
 
 class ObservationLatest(Base):
     __tablename__ = "observation_latest"
-    __table_args__ = (CheckConstraint("(station_id IS NULL) != (reach_id IS NULL)", name="ck_one_entity_latest"),)
+    __table_args__ = (
+        CheckConstraint("(station_id IS NULL) != (reach_id IS NULL)", name="ck_one_entity_latest"),
+        Index("uq_latest_station_property", "station_id", "property", unique=True, postgresql_where="station_id IS NOT NULL"),
+        Index("uq_latest_reach_property", "reach_id", "property", unique=True, postgresql_where="reach_id IS NOT NULL"),
+    )
 
     latest_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     entity_type: Mapped[str] = mapped_column(String, nullable=False)
