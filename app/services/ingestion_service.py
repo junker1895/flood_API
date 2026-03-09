@@ -1,8 +1,11 @@
 from contextlib import contextmanager
+
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.adapters.base import NormalizedObservation
+from app.core.enums import EntityType
 from app.core.time import utcnow
 from app.db.models import IngestionRun, ObservationLatest, ObservationTimeseries
 
@@ -32,35 +35,66 @@ def tracked_run(db: Session, provider_id: str, job_type: str):
         run.finished_at = utcnow()
 
 
-def upsert_latest_and_append_ts(db: Session, obs: NormalizedObservation) -> tuple[int, int]:
-    inserted = 0
-    updated = 0
-    q = select(ObservationLatest).where(
-        ObservationLatest.property == obs.property,
-        ObservationLatest.station_id == obs.station_id,
-        ObservationLatest.reach_id == obs.reach_id,
-    )
-    existing = db.scalar(q)
-    payload = obs.model_dump()
-    if existing:
-        for k, v in payload.items():
-            if hasattr(existing, k):
-                setattr(existing, k, v)
-        existing.ingested_at = utcnow()
-        updated += 1
-    else:
-        db.add(ObservationLatest(**payload, ingested_at=utcnow()))
-        inserted += 1
+def _latest_upsert_stmt(payload: dict):
+    table = ObservationLatest.__table__
+    base = insert(table).values(**payload)
 
-    ts_exists = db.scalar(
-        select(ObservationTimeseries).where(
-            ObservationTimeseries.property == obs.property,
-            ObservationTimeseries.station_id == obs.station_id,
-            ObservationTimeseries.reach_id == obs.reach_id,
-            ObservationTimeseries.observed_at == obs.observed_at,
+    update_cols = {
+        "observed_at": base.excluded.observed_at,
+        "value_native": base.excluded.value_native,
+        "unit_native": base.excluded.unit_native,
+        "value_canonical": base.excluded.value_canonical,
+        "unit_canonical": base.excluded.unit_canonical,
+        "quality_code": base.excluded.quality_code,
+        "quality_score": base.excluded.quality_score,
+        "aggregation": base.excluded.aggregation,
+        "is_provisional": base.excluded.is_provisional,
+        "is_estimated": base.excluded.is_estimated,
+        "is_missing": base.excluded.is_missing,
+        "is_forecast": base.excluded.is_forecast,
+        "is_flagged": base.excluded.is_flagged,
+        "provider_observation_id": base.excluded.provider_observation_id,
+        "ingested_at": base.excluded.ingested_at,
+        "raw_payload": base.excluded.raw_payload,
+    }
+
+    if payload["entity_type"] == EntityType.STATION:
+        return base.on_conflict_do_update(
+            index_elements=["station_id", "property"],
+            index_where=table.c.station_id.is_not(None),
+            set_=update_cols,
         )
+
+    return base.on_conflict_do_update(
+        index_elements=["reach_id", "property"],
+        index_where=table.c.reach_id.is_not(None),
+        set_=update_cols,
     )
-    if not ts_exists:
-        db.add(ObservationTimeseries(**payload, ingested_at=utcnow()))
-        inserted += 1
+
+
+def _timeseries_insert_stmt(payload: dict):
+    table = ObservationTimeseries.__table__
+    base = insert(table).values(**payload)
+    if payload["entity_type"] == EntityType.STATION:
+        return base.on_conflict_do_nothing(
+            index_elements=["station_id", "property", "observed_at"],
+            index_where=table.c.station_id.is_not(None),
+        )
+
+    return base.on_conflict_do_nothing(
+        index_elements=["reach_id", "property", "observed_at"],
+        index_where=table.c.reach_id.is_not(None),
+    )
+
+
+def upsert_latest_and_append_ts(db: Session, obs: NormalizedObservation) -> tuple[int, int]:
+    payload = obs.model_dump()
+    payload["ingested_at"] = utcnow()
+
+    latest_result = db.execute(_latest_upsert_stmt(payload))
+    # rowcount can be 1 for insert/update; keep semantics simple for run counters
+    updated = 1 if latest_result.rowcount else 0
+
+    ts_result = db.execute(_timeseries_insert_stmt(payload))
+    inserted = 1 if ts_result.rowcount else 0
     return inserted, updated
