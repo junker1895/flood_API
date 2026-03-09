@@ -24,5 +24,10 @@ class Settings(BaseSettings):
 
     geoglows_api_key: str | None = None
 
+    station_fresh_minutes: int = 30
+    station_stale_minutes: int = 360
+    reach_fresh_minutes: int = 720
+    reach_stale_minutes: int = 2880
+
 
 settings = Settings()
