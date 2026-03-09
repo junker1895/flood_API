@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 from app.adapters.ea_england import EAEnglandAdapter
 from app.adapters.geoglows import GeoglowsAdapter
 from app.adapters.usgs import USGSAdapter
+from app.adapters.base import NormalizedObservation
 from app.core.ids import station_id
 from app.core.time import utcnow
-from app.db.models import Provider, Station
+from app.db.models import Provider, Reach, Station
 from app.services.ingestion_service import tracked_run, upsert_latest_and_append_ts
 from app.services.provider_registry import build_provider
 
@@ -43,8 +44,6 @@ async def _enrich_ea_station_if_missing(db: Session, adapter: EAEnglandAdapter, 
     station = adapter.normalize_station(station_raw)
     now = utcnow()
     station_payload = station.model_dump()
-    # EA station detail can use a different notation than measure.stationReference.
-    # Keep IDs aligned to the observation reference to satisfy FK upsert retry.
     station_payload["station_id"] = sid
     station_payload["provider_station_id"] = station_ref
     db.merge(
@@ -64,6 +63,92 @@ async def _enrich_ea_station_if_missing(db: Session, adapter: EAEnglandAdapter, 
     return True
 
 
+async def _enrich_usgs_station_if_missing(db: Session, adapter: USGSAdapter, obs: NormalizedObservation) -> bool:
+    if not obs.station_id:
+        return False
+
+    if db.get(Station, obs.station_id):
+        return True
+
+    provider_station = obs.station_id.removeprefix(f"{adapter.provider_id}-")
+    try:
+        records = await adapter.fetch_station_catalog()
+    except (httpx.HTTPError, TimeoutError) as exc:
+        logger.warning("usgs station enrichment fetch failed for %s: %s", provider_station, exc)
+        return False
+
+    for raw in records:
+        st = adapter.normalize_station(raw)
+        if st.provider_station_id != provider_station:
+            continue
+
+        now = utcnow()
+        payload = st.model_dump()
+        payload["station_id"] = obs.station_id
+        payload["provider_station_id"] = provider_station
+        db.merge(
+            Station(
+                **payload,
+                first_seen_at=now,
+                last_seen_at=now,
+                last_metadata_refresh_at=now,
+                normalization_version="v1",
+            )
+        )
+        db.flush()
+        logger.info("usgs station enrichment created station_id=%s", obs.station_id)
+        return True
+
+    logger.info("usgs station enrichment found no matching station for station_id=%s", obs.station_id)
+    return False
+
+
+async def _enrich_geoglows_reach_if_missing(db: Session, adapter: GeoglowsAdapter, raw: dict, obs: NormalizedObservation) -> bool:
+    if not obs.reach_id:
+        return False
+    if db.get(Reach, obs.reach_id):
+        return True
+
+    provider_reach = obs.reach_id.removeprefix(f"{adapter.provider_id}-")
+    try:
+        records = await adapter.fetch_reach_catalog()
+    except (httpx.HTTPError, TimeoutError) as exc:
+        logger.warning("geoglows reach enrichment fetch failed for %s: %s", provider_reach, exc)
+        return False
+
+    selected = None
+    for record in records:
+        if str(record.get("reach_id")) == provider_reach:
+            selected = record
+            break
+
+    if selected is None and raw.get("reach_id") is not None:
+        selected = {
+            "reach_id": str(raw["reach_id"]),
+            "lat": raw.get("lat"),
+            "lon": raw.get("lon"),
+            "river": raw.get("river", "Unknown"),
+        }
+
+    if selected is None:
+        logger.info("geoglows reach enrichment found no match for reach_id=%s", obs.reach_id)
+        return False
+
+    reach = adapter.normalize_reach(selected)
+    now = utcnow()
+    db.merge(
+        Reach(
+            **reach.model_dump(),
+            first_seen_at=now,
+            last_metadata_refresh_at=now,
+            normalization_version="v1",
+        )
+    )
+    db.flush()
+    logger.info("geoglows reach enrichment created reach_id=%s", obs.reach_id)
+    return True
+
+
 async def run(db: Session) -> None:
     for adapter in [USGSAdapter(), EAEnglandAdapter(), GeoglowsAdapter()]:
         if not db.is_active:
@@ -74,11 +159,15 @@ async def run(db: Session) -> None:
         with tracked_run(db, adapter.provider_id, "sync_latest") as run_state:
             try:
                 records = await adapter.fetch_latest_observations()
+                logger.info("sync_latest provider=%s fetched_records=%s", adapter.provider_id, len(records))
             except (httpx.HTTPError, TimeoutError) as exc:
                 run_state.records_failed += 1
                 run_state.error_summary = f"fetch_latest_observations failed: {exc!r}"[:4000]
                 logger.warning("latest sync fetch failed for %s: %s", adapter.provider_id, exc)
                 continue
+
+            if not records:
+                logger.info("sync_latest provider=%s fetched zero records", adapter.provider_id)
 
             for raw in records:
                 try:
@@ -92,11 +181,15 @@ async def run(db: Session) -> None:
                             run_state.records_inserted += ins
                             run_state.records_updated += upd
                         except ValueError as exc:
-                            if (
-                                adapter.provider_id == "ea_england"
-                                and "entity missing for observation" in str(exc)
-                                and await _enrich_ea_station_if_missing(db, adapter, raw)
-                            ):
+                            recovered = False
+                            if adapter.provider_id == "ea_england" and "entity missing for observation" in str(exc):
+                                recovered = await _enrich_ea_station_if_missing(db, adapter, raw)
+                            elif adapter.provider_id == "usgs" and "entity missing for observation" in str(exc):
+                                recovered = await _enrich_usgs_station_if_missing(db, adapter, obs)
+                            elif adapter.provider_id == "geoglows" and "entity missing for observation" in str(exc):
+                                recovered = await _enrich_geoglows_reach_if_missing(db, adapter, raw, obs)
+
+                            if recovered:
                                 try:
                                     with db.begin_nested():
                                         ins, upd = upsert_latest_and_append_ts(db, obs)
@@ -124,4 +217,14 @@ async def run(db: Session) -> None:
                     run_state.error_summary = f"normalize_observation failed: {exc!r}"[:4000]
                     logger.warning("latest normalization failed for %s: %s", adapter.provider_id, exc)
 
+            logger.info(
+                "sync_latest provider=%s seen=%s inserted=%s updated=%s failed=%s",
+                adapter.provider_id,
+                run_state.records_seen,
+                run_state.records_inserted,
+                run_state.records_updated,
+                run_state.records_failed,
+            )
+
     db.commit()
+    logger.info("sync_latest committed")
