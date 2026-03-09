@@ -224,3 +224,28 @@ def test_sync_metadata_module_main_executes_job(monkeypatch):
     sync_metadata.main()
 
     assert events == ["enter", "run", "exit"]
+
+
+def test_ensure_providers_ignores_duplicate_insert_race(monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    class FakeDBProviderRace(FakeDB):
+        def __init__(self):
+            super().__init__()
+            self.flush_calls = 0
+            self.rollback_calls = 0
+
+        def flush(self):
+            self.flush_calls += 1
+            if self.flush_calls == 1:
+                raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+    db = FakeDBProviderRace()
+
+    created = sync_metadata._ensure_providers(db)
+
+    assert created == 3
+    assert db.rollback_calls == 1
