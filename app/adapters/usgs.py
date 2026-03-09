@@ -13,13 +13,25 @@ class USGSAdapter(BaseAdapter):
     supports_stations = True
     supports_history = True
 
+    @staticmethod
+    def _safe_float(value: str | None, default: float = 0.0) -> float:
+        try:
+            return float(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _is_data_line(line: str) -> bool:
+        # NWIS RDB files include header and format lines. Data lines typically start with agency code, e.g. "USGS".
+        return bool(line) and not line.startswith("#") and line.split("\t", 1)[0] == "USGS"
+
     async def fetch_station_catalog(self) -> list[dict]:
         url = "https://waterservices.usgs.gov/nwis/site/?format=rdb&stateCd=co&siteType=ST"
         async with httpx.AsyncClient(timeout=20) as client:
             r = await client.get(url)
             r.raise_for_status()
-        lines = [ln for ln in r.text.splitlines() if ln and not ln.startswith("#")]
-        return [{"line": ln} for ln in lines[:50]]
+        lines = [ln for ln in r.text.splitlines() if self._is_data_line(ln)]
+        return [{"line": ln} for ln in lines[:250]]
 
     def normalize_station(self, raw: dict) -> NormalizedStation:
         parts = raw["line"].split("\t")
@@ -29,8 +41,8 @@ class USGSAdapter(BaseAdapter):
             provider_id=self.provider_id,
             provider_station_id=provider_station_id,
             name=parts[2] if len(parts) > 2 else provider_station_id,
-            latitude=float(parts[4]) if len(parts) > 4 else 0,
-            longitude=float(parts[5]) if len(parts) > 5 else 0,
+            latitude=self._safe_float(parts[4] if len(parts) > 4 else None),
+            longitude=self._safe_float(parts[5] if len(parts) > 5 else None),
             raw_metadata=raw,
         )
 
@@ -50,21 +62,23 @@ class USGSAdapter(BaseAdapter):
             value = float(p["value"])
             qual = normalize_quality(p.get("qualifiers", [""])[0])
             value_c, unit_c = to_canonical(value, unit, prop)
-            observations.append(NormalizedObservation(
-                entity_type="station",
-                station_id=station_id(self.provider_id, series["sourceInfo"]["siteCode"][0]["value"]),
-                property=prop,
-                observed_at=datetime.fromisoformat(p["dateTime"].replace("Z", "+00:00")).astimezone(UTC),
-                value_native=value,
-                unit_native=unit,
-                value_canonical=value_c,
-                unit_canonical=unit_c,
-                quality_code=qual["quality_code"],
-                is_provisional=bool(qual["is_provisional"]),
-                is_estimated=bool(qual["is_estimated"]),
-                is_missing=bool(qual["is_missing"]),
-                is_forecast=bool(qual["is_forecast"]),
-                is_flagged=bool(qual["is_flagged"]),
-                raw_payload=p,
-            ))
+            observations.append(
+                NormalizedObservation(
+                    entity_type="station",
+                    station_id=station_id(self.provider_id, series["sourceInfo"]["siteCode"][0]["value"]),
+                    property=prop,
+                    observed_at=datetime.fromisoformat(p["dateTime"].replace("Z", "+00:00")).astimezone(UTC),
+                    value_native=value,
+                    unit_native=unit,
+                    value_canonical=value_c,
+                    unit_canonical=unit_c,
+                    quality_code=qual["quality_code"],
+                    is_provisional=bool(qual["is_provisional"]),
+                    is_estimated=bool(qual["is_estimated"]),
+                    is_missing=bool(qual["is_missing"]),
+                    is_forecast=bool(qual["is_forecast"]),
+                    is_flagged=bool(qual["is_flagged"]),
+                    raw_payload=p,
+                )
+            )
         return observations
