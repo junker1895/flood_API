@@ -37,6 +37,12 @@ class EAEnglandAdapter(BaseAdapter):
             r.raise_for_status()
             return r.json().get("items", [])[:30]
 
+    async def fetch_station_by_reference(self, station_reference: str) -> dict | None:
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(f"https://environment.data.gov.uk/flood-monitoring/id/stations/{station_reference}")
+            r.raise_for_status()
+            return r.json().get("items")
+
     def normalize_observation(self, raw: dict) -> NormalizedObservation:
         prop = "stage"
         unit = raw.get("unitName", "m")
