@@ -69,12 +69,40 @@ class EAEnglandAdapter(BaseAdapter):
             r.raise_for_status()
             return r.json().get("items", [])
 
+    @staticmethod
+    def _parse_dt(raw: str | None) -> datetime | None:
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _geometry(raw: dict) -> dict | None:
+        # EA payloads can include geometry-like fields on selected resources.
+        for key in ("geometry", "polygon", "floodAreaPolygon"):
+            geom = raw.get(key)
+            if isinstance(geom, dict) and geom.get("type"):
+                return geom
+        return None
+
     def normalize_warning(self, raw: dict) -> NormalizedWarning:
         return NormalizedWarning(
             warning_id=raw.get("floodAreaID", raw.get("id", "ea-warning")),
             provider_id=self.provider_id,
             severity=raw.get("severity"),
             title=raw.get("description"),
-            status=raw.get("message"),
-            raw_payload=raw,
+            status=raw.get("message") or raw.get("severityLevel"),
+            raw_payload={
+                **raw,
+                "warning_type": raw.get("floodArea", {}).get("type") if isinstance(raw.get("floodArea"), dict) else None,
+                "issued_at": self._parse_dt(raw.get("timeRaised") or raw.get("timeMessageChanged")),
+                "effective_from": self._parse_dt(raw.get("timeRaised")),
+                "effective_to": self._parse_dt(raw.get("timeSeverityChanged")),
+                "description": raw.get("message") or raw.get("description"),
+                "geometry": self._geometry(raw),
+                "related_station_ids": None,
+                "related_reach_ids": None,
+            },
         )

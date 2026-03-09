@@ -26,7 +26,28 @@ async def run(db: Session) -> None:
         for raw in records:
             try:
                 w = ea.normalize_warning(raw)
-                db.merge(WarningEvent(**w.model_dump(), ingested_at=utcnow()))
+                payload = w.model_dump()
+                raw_meta = payload.get("raw_payload", {})
+                db.merge(
+                    WarningEvent(
+                        warning_id=payload["warning_id"],
+                        provider_id=payload["provider_id"],
+                        severity=payload.get("severity"),
+                        title=payload.get("title"),
+                        status=payload.get("status"),
+                        description=raw_meta.get("description"),
+                        warning_type=raw_meta.get("warning_type"),
+                        issued_at=raw_meta.get("issued_at"),
+                        effective_from=raw_meta.get("effective_from"),
+                        effective_to=raw_meta.get("effective_to"),
+                        # Keep geometry nullable unless adapter returns DB-ready geometry encoding.
+                        geometry=None,
+                        related_station_ids=raw_meta.get("related_station_ids"),
+                        related_reach_ids=raw_meta.get("related_reach_ids"),
+                        raw_payload=payload.get("raw_payload"),
+                        ingested_at=utcnow(),
+                    )
+                )
                 run_state.records_seen += 1
                 run_state.records_updated += 1
             except Exception as exc:
