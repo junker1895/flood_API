@@ -58,6 +58,40 @@ pytest
 python -m compileall app
 ```
 
+### Testing when running in Docker (recommended for this repo)
+If you're running the stack with `docker compose`, run checks inside the `api` container so dependencies (including `pytest-asyncio`) match the app runtime.
+
+1. Build and start containers:
+   ```bash
+   docker compose up --build -d
+   ```
+2. Apply migrations:
+   ```bash
+   docker compose exec api alembic upgrade head
+   ```
+3. Run the focused upgrade tests:
+   ```bash
+   docker compose exec api pytest -q app/tests/test_api_upgrades.py
+   ```
+4. Run the full suite:
+   ```bash
+   docker compose exec api pytest -q
+   ```
+5. Optional sanity compile check:
+   ```bash
+   docker compose exec api python -m compileall app
+   ```
+
+### Quick API smoke checks in Docker
+After `docker compose up` and migrations:
+
+```bash
+curl "http://localhost:8000/v1/stations/map?bbox=-180,-90,180,90&limit=5"
+curl "http://localhost:8000/v1/reaches/map?bbox=-180,-90,180,90&limit=5"
+curl "http://localhost:8000/v1/warnings/active?bbox=-180,-90,180,90"
+curl "http://localhost:8000/v1/thresholds?limit=5"
+```
+
 ## Key API routes
 - Providers: `GET /v1/providers`, `GET /v1/providers/{provider_id}`
 - Stations: `GET /v1/stations`, `GET /v1/stations/latest`, `GET /v1/stations/{station_id}/timeseries`, `GET /v1/stations/{station_id}/thresholds`
