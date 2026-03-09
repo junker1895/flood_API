@@ -1,12 +1,14 @@
 import logging
 
 import httpx
+from geoalchemy2 import WKTElement
 from sqlalchemy.orm import Session
 
 from app.adapters.ea_england import EAEnglandAdapter
 from app.adapters.geoglows import GeoglowsAdapter
 from app.adapters.usgs import USGSAdapter
 from app.core.time import utcnow
+from app.db.geometry import point_geom_from_latlon
 from app.db.models import Provider, Reach, Station
 from app.services.ingestion_service import tracked_run
 from app.services.provider_registry import build_provider
@@ -49,9 +51,11 @@ async def run(db: Session) -> None:
                     st = adapter.normalize_station(raw)
                     payload = st.model_dump()
                     now = utcnow()
+                    station_geom = point_geom_from_latlon(payload.get("latitude"), payload.get("longitude"))
                     db.merge(
                         Station(
                             **payload,
+                            geom=station_geom,
                             first_seen_at=now,
                             last_seen_at=now,
                             last_metadata_refresh_at=now,
@@ -93,10 +97,15 @@ async def run(db: Session) -> None:
             try:
                 reach = g.normalize_reach(raw)
                 payload = reach.model_dump()
+                reach_geometry_wkt = payload.pop("geometry_wkt", None)
+                reach_geom = WKTElement(reach_geometry_wkt, srid=4326) if reach_geometry_wkt else point_geom_from_latlon(
+                    payload.get("latitude"), payload.get("longitude")
+                )
                 now = utcnow()
                 db.merge(
                     Reach(
                         **payload,
+                        geom=reach_geom,
                         first_seen_at=now,
                         last_metadata_refresh_at=now,
                         normalization_version="v1",
