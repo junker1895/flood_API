@@ -73,6 +73,13 @@ python -m compileall app
 
 
 ## Troubleshooting
+- If `docker compose exec api pytest` fails with `"pytest": executable file not found in $PATH`, rebuild the API image after this change (it now installs test extras):
+  ```bash
+  docker compose build api --no-cache
+  docker compose up -d
+  docker compose exec api pytest
+  ```
+
 - If `docker compose exec api alembic upgrade head` fails with `ModuleNotFoundError: No module named "app"`, rebuild images after pulling latest changes and retry:
   ```bash
   docker compose down
