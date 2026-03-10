@@ -41,6 +41,7 @@ class GeoglowsAdapter(BaseAdapter):
         self.reach_ids = self._parse_csv(os.getenv("GEOGLOWS_REACH_IDS"))
         self.region_filter = os.getenv("GEOGLOWS_REGION")
         self.history_lookback_days = self._parse_int(os.getenv("GEOGLOWS_HISTORY_LOOKBACK_DAYS"), default=7)
+        self.fallback_to_reach_id = self._parse_bool(os.getenv("GEOGLOWS_FALLBACK_TO_REACH_ID"), default=True)
 
         self.forecast_date = (os.getenv("GEOGLOWS_FORECAST_DATE") or "").strip()
         if self.forecast_date and not self._valid_yyyymmdd(self.forecast_date):
@@ -66,6 +67,10 @@ class GeoglowsAdapter(BaseAdapter):
             return True
         except ValueError:
             return False
+
+    @classmethod
+    def _valid_river_id(cls, value: str) -> bool:
+        return value.isdigit() and len(value) == 9 and value not in cls._KNOWN_PLACEHOLDER_RIVER_IDS
 
     @staticmethod
     def _parse_csv(value: str | None) -> list[str]:
