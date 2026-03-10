@@ -30,7 +30,7 @@ class ProviderSchedule:
 DEFAULT_PROVIDER_CAPABILITIES: dict[str, frozenset[JobType]] = {
     "usgs": frozenset({JobType.METADATA, JobType.LATEST, JobType.HISTORY}),
     "ea_england": frozenset({JobType.METADATA, JobType.LATEST, JobType.WARNINGS}),
-    "geoglows": frozenset({JobType.METADATA, JobType.LATEST}),
+    "geoglows": frozenset({JobType.METADATA, JobType.LATEST, JobType.HISTORY}),
     "whos": frozenset({JobType.METADATA}),
 }
 

@@ -143,9 +143,15 @@ async def run(db: Session, provider_id: str | None = None) -> None:
                     payload.get("latitude"), payload.get("longitude")
                 )
                 now = utcnow()
+                raw_meta = payload.get("raw_metadata") or {}
                 db.merge(
                     Reach(
                         **payload,
+                        name=raw_meta.get("name") or raw_meta.get("river") or raw_meta.get("river_name"),
+                        river_name=raw_meta.get("river_name") or raw_meta.get("river"),
+                        country_code=raw_meta.get("country_code") or raw_meta.get("country"),
+                        network_name=raw_meta.get("network_name") or raw_meta.get("modeled_source_type"),
+                        geometry_type=(raw_meta.get("geometry") or {}).get("type") if isinstance(raw_meta.get("geometry"), dict) else None,
                         geom=reach_geom,
                         first_seen_at=now,
                         last_metadata_refresh_at=now,

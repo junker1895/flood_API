@@ -129,17 +129,19 @@ async def _enrich_geoglows_reach_if_missing(db: Session, adapter: GeoglowsAdapte
         return True
 
     provider_reach = obs.reach_id.removeprefix(f"{adapter.provider_id}-")
+    selected = None
     try:
-        records = await adapter.fetch_reach_catalog()
+        if hasattr(adapter, "fetch_reach_by_id"):
+            selected = await adapter.fetch_reach_by_id(provider_reach)
+        if selected is None:
+            records = await adapter.fetch_reach_catalog()
+            for record in records:
+                if str(record.get("reach_id")) == provider_reach:
+                    selected = record
+                    break
     except (httpx.HTTPError, TimeoutError) as exc:
         logger.warning("geoglows reach enrichment fetch failed for %s: %s", provider_reach, exc)
         return False
-
-    selected = None
-    for record in records:
-        if str(record.get("reach_id")) == provider_reach:
-            selected = record
-            break
 
     if selected is None and raw.get("reach_id") is not None:
         selected = {
@@ -160,9 +162,15 @@ async def _enrich_geoglows_reach_if_missing(db: Session, adapter: GeoglowsAdapte
     reach_geom = WKTElement(reach_geometry_wkt, srid=4326) if reach_geometry_wkt else point_geom_from_latlon(
         payload.get("latitude"), payload.get("longitude")
     )
+    raw_meta = payload.get("raw_metadata") or {}
     db.merge(
         Reach(
             **payload,
+            name=raw_meta.get("name") or raw_meta.get("river") or raw_meta.get("river_name"),
+            river_name=raw_meta.get("river_name") or raw_meta.get("river"),
+            country_code=raw_meta.get("country_code") or raw_meta.get("country"),
+            network_name=raw_meta.get("network_name") or raw_meta.get("modeled_source_type"),
+            geometry_type=(raw_meta.get("geometry") or {}).get("type") if isinstance(raw_meta.get("geometry"), dict) else None,
             geom=reach_geom,
             first_seen_at=now,
             last_metadata_refresh_at=now,
