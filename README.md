@@ -19,6 +19,9 @@ Production-minded backend platform for ingesting global hydrology data from mult
 - `app/api/*`: FastAPI routes and schemas.
 - `alembic/*`: migrations.
 
+## Roadmap
+- See `PROJECT_ROADMAP.md` for the phased implementation plan, conflict/dependency notes, and execution checklist.
+
 ## Providers (initial)
 - USGS: observed stations, latest/historical patterns.
 - Environment Agency England: observed stations + warnings.
