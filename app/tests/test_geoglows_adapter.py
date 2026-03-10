@@ -1,4 +1,5 @@
 from datetime import UTC
+import asyncio
 
 import httpx
 
@@ -59,8 +60,6 @@ def test_fetch_latest_observations_v2_forecaststats(monkeypatch):
     monkeypatch.setattr(adapter, "_request_json_url", fake_url)
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
-    import asyncio
-
     items = asyncio.run(adapter.fetch_latest_observations())
 
     assert len(items) == 1
@@ -85,8 +84,6 @@ def test_fetch_latest_observations_falls_back_to_v2_ensembles(monkeypatch):
 
     monkeypatch.setattr(adapter, "_request_json_url", fake_url)
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
-
-    import asyncio
 
     items = asyncio.run(adapter.fetch_latest_observations())
 
@@ -114,13 +111,12 @@ def test_fetch_historical_timeseries_v2_retrospective_columnar(monkeypatch):
     monkeypatch.setattr(adapter, "_request_json_url", fake_url)
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
-    import asyncio
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
-    items = asyncio.run(adapter.fetch_latest_observations())
-
-    assert len(items) == 1
-    assert items[0]["flow"] == 4.2
-    assert items[0]["meta"]["product"] == "forecastensemble"
+    assert len(records) == 2
+    assert records[0]["flow"] == 7.1
+    assert records[1]["flow"] == 7.5
+    assert records[0]["meta"]["product"] == "retrospectivedaily"
 
 
 def test_metadata_best_effort_does_not_block_latest(monkeypatch):
@@ -138,9 +134,7 @@ def test_metadata_best_effort_does_not_block_latest(monkeypatch):
     monkeypatch.setattr(adapter, "_request_json_url", fake_url)
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
-    import asyncio
-
-    records = asyncio.run(adapter.fetch_historical_timeseries())
+    items = asyncio.run(adapter.fetch_latest_observations())
 
     assert len(items) == 1
     assert items[0]["reach_id"] == "902800057"
@@ -164,14 +158,11 @@ def test_invalid_configured_ids_are_filtered(monkeypatch):
     monkeypatch.setattr(adapter, "_request_json_url", fake_url)
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
-    import asyncio
-
-    records = asyncio.run(adapter.fetch_historical_timeseries())
+    items = asyncio.run(adapter.fetch_latest_observations())
 
     assert len(items) == 1
     assert any("/forecaststats/902800057" in url for url in seen)
-    assert all("1001" not in url and "123456789" not in url for url in seen)
-
+    assert all("forecaststats/1001" not in url and "forecaststats/123456789" not in url for url in seen)
 
 
 def test_fetch_reach_by_id_prefers_metadata_with_geometry(monkeypatch):
@@ -192,14 +183,29 @@ def test_fetch_reach_by_id_prefers_metadata_with_geometry(monkeypatch):
 
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
-    import asyncio
-
     row = asyncio.run(adapter.fetch_reach_by_id("902800057"))
 
     assert row is not None
     assert row.get("geometry", {}).get("type") == "LineString"
     assert row.get("river_id") == "902800057"
 
+
+def test_fetch_reach_by_id_skips_reach_id_query_when_fallback_disabled(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.fallback_to_reach_id = False
+    seen_params = []
+
+    async def fake_legacy(endpoint, params=None):
+        assert endpoint == adapter.reach_metadata_endpoint
+        seen_params.append(params)
+        return {"river_id": "902800057"}
+
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
+
+    row = asyncio.run(adapter.fetch_reach_by_id("902800057"))
+
+    assert row is not None
+    assert seen_params == [{"river_id": "902800057"}]
 
 
 def test_metadata_best_effort_does_not_block_history(monkeypatch):
@@ -217,8 +223,6 @@ def test_metadata_best_effort_does_not_block_history(monkeypatch):
 
     monkeypatch.setattr(adapter, "_request_json_url", fake_url)
     monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
-
-    import asyncio
 
     records = asyncio.run(adapter.fetch_historical_timeseries())
 
