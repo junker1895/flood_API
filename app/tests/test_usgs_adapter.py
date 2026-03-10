@@ -121,11 +121,11 @@ def test_fetch_station_catalog_accepts_postal_state_filter(monkeypatch):
     assert captured["params"]["stateCd"] == "MD,VA"
 
 
-def test_fetch_station_catalog_uses_default_bbox_when_no_selector(monkeypatch):
+def test_fetch_station_catalog_uses_default_site_when_no_selector(monkeypatch):
     monkeypatch.delenv("USGS_SITE_LIST", raising=False)
     monkeypatch.delenv("USGS_STATE_CODES", raising=False)
     monkeypatch.delenv("USGS_BBOX", raising=False)
-    monkeypatch.setenv("USGS_DEFAULT_BBOX", "-125,24,-66,50")
+    monkeypatch.delenv("USGS_DEFAULT_SITE_LIST", raising=False)
     captured = {}
 
     class FakeResponse:
@@ -152,7 +152,41 @@ def test_fetch_station_catalog_uses_default_bbox_when_no_selector(monkeypatch):
     adapter = USGSAdapter()
     rows = asyncio.run(adapter.fetch_station_catalog())
     assert rows[0]["site_no"] == "1"
-    assert captured["params"]["bBox"] == "-125.0,24.0,-66.0,50.0"
+    assert captured["params"]["sites"] == "01646500"
+
+
+def test_fetch_station_catalog_uses_default_site_list_when_configured(monkeypatch):
+    monkeypatch.delenv("USGS_SITE_LIST", raising=False)
+    monkeypatch.delenv("USGS_STATE_CODES", raising=False)
+    monkeypatch.delenv("USGS_BBOX", raising=False)
+    monkeypatch.setenv("USGS_DEFAULT_SITE_LIST", "01651000,01646500")
+    captured = {}
+
+    class FakeResponse:
+        text = "agency_cd\tsite_no\tstation_nm\n5s\t15s\t50s\nUSGS\t1\tA"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, _url, params=None):
+            captured["params"] = params
+            return FakeResponse()
+
+    monkeypatch.setattr("app.adapters.usgs.httpx.AsyncClient", FakeClient)
+    adapter = USGSAdapter()
+    rows = asyncio.run(adapter.fetch_station_catalog())
+    assert rows[0]["site_no"] == "1"
+    assert captured["params"]["sites"] == "01651000,01646500"
 
 
 def test_fetch_historical_timeseries_uses_time_window(monkeypatch):

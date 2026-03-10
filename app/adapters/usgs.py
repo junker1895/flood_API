@@ -41,9 +41,11 @@ class USGSAdapter(BaseAdapter):
         self.parameter_codes = self._parse_csv(os.getenv("USGS_PARAMETER_CODES")) or ["00060", "00065"]
         self.bbox = self._parse_bbox(os.getenv("USGS_BBOX"))
         if not self.site_ids and not self.state_codes and self.bbox is None:
-            # NWIS site endpoint requires a location selector; use a conservative US-wide fallback
-            # so default env files can still discover stations.
-            self.bbox = self._parse_bbox(os.getenv("USGS_DEFAULT_BBOX", "-125,24,-66,50"))
+            # NWIS site endpoint requires a location selector. Use a stable default site fallback
+            # first (predictable response size), then optional default bbox if configured.
+            self.site_ids = self._parse_csv(os.getenv("USGS_DEFAULT_SITE_LIST")) or ["01646500"]
+            if not self.site_ids:
+                self.bbox = self._parse_bbox(os.getenv("USGS_DEFAULT_BBOX", "-125,24,-66,50"))
         self.history_lookback_days = self._parse_int(os.getenv("USGS_HISTORY_LOOKBACK_DAYS"), default=7)
         self.history_start = self._parse_date(os.getenv("USGS_HISTORY_START"))
         self.history_end = self._parse_date(os.getenv("USGS_HISTORY_END"))
