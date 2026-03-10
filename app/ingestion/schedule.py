@@ -30,7 +30,7 @@ class ProviderSchedule:
 DEFAULT_PROVIDER_CAPABILITIES: dict[str, frozenset[JobType]] = {
     "usgs": frozenset({JobType.METADATA, JobType.LATEST, JobType.HISTORY}),
     "ea_england": frozenset({JobType.METADATA, JobType.LATEST, JobType.WARNINGS}),
-    "geoglows": frozenset({JobType.METADATA, JobType.LATEST}),
+    "geoglows": frozenset({JobType.METADATA, JobType.LATEST, JobType.HISTORY}),
     "whos": frozenset({JobType.METADATA}),
 }
 
@@ -99,13 +99,18 @@ def _parse_float(raw: str | None) -> float | None:
 
 def _provider_enabled(provider_id: str) -> bool:
     provider_key = _provider_env_key(provider_id)
+    provider_env_key = f"PROVIDERS__{provider_key}__ENABLED"
+    if provider_env_key in os.environ:
+        return _parse_bool(
+            os.getenv(provider_env_key),
+            DEFAULT_PROVIDER_ENABLED.get(provider_id, True),
+        )
+
     legacy_env = LEGACY_PROVIDER_ENABLE_ENV.get(provider_id)
     if legacy_env and legacy_env in os.environ:
         return _parse_bool(os.getenv(legacy_env), DEFAULT_PROVIDER_ENABLED.get(provider_id, True))
-    return _parse_bool(
-        os.getenv(f"PROVIDERS__{provider_key}__ENABLED"),
-        DEFAULT_PROVIDER_ENABLED.get(provider_id, True),
-    )
+
+    return DEFAULT_PROVIDER_ENABLED.get(provider_id, True)
 
 
 def _job_enabled(provider_id: str, job_type: JobType, supported_jobs: frozenset[JobType]) -> bool:
