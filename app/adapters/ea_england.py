@@ -5,6 +5,7 @@ import httpx
 from app.adapters.base import BaseAdapter, NormalizedObservation, NormalizedStation, NormalizedWarning
 from app.core.ids import station_id
 from app.core.quality import normalize_quality
+from app.core.validation import valid_latlon
 from app.core.units import to_canonical
 
 
@@ -21,13 +22,25 @@ class EAEnglandAdapter(BaseAdapter):
 
     def normalize_station(self, raw: dict) -> NormalizedStation:
         sid = raw.get("notation", raw.get("stationReference", "unknown"))
+        lat = raw.get("lat")
+        lon = raw.get("long")
+        if lat is None or lon is None:
+            raise ValueError(f"station missing coordinates: provider_station_id={sid}")
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"station has invalid coordinates: provider_station_id={sid}") from exc
+        if not valid_latlon(lat, lon):
+            raise ValueError(f"station has out-of-range coordinates: provider_station_id={sid}")
+
         return NormalizedStation(
             station_id=station_id(self.provider_id, sid),
             provider_id=self.provider_id,
             provider_station_id=sid,
             name=raw.get("label", sid),
-            latitude=raw.get("lat", 0),
-            longitude=raw.get("long", 0),
+            latitude=lat,
+            longitude=lon,
             raw_metadata=raw,
         )
 

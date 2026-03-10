@@ -70,13 +70,14 @@ def stations_map(
 @router.get("/latest", response_model=ListEnvelope[ObservationOut])
 def stations_latest(
     property: str | None = None,
+    provider_id: str | None = None,
     bbox: str | None = None,
     limit: int = Query(settings.default_limit, ge=1, le=settings.max_limit),
     db: Session = Depends(get_db),
 ):
     items = [
         ObservationOut.model_validate(o, from_attributes=True)
-        for o in latest_for_stations(db, property, limit, bbox=parse_bbox(bbox))
+        for o in latest_for_stations(db, property, provider_id, limit, bbox=parse_bbox(bbox))
     ]
     return {"data": items, "meta": Meta(count=len(items))}
 
