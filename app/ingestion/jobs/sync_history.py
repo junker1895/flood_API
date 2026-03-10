@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.adapters.ea_england import EAEnglandAdapter
 from app.adapters.geoglows import GeoglowsAdapter
 from app.adapters.usgs import USGSAdapter
-from app.ingestion.jobs.sync_latest import _enrich_usgs_station_if_missing
+from app.ingestion.jobs.sync_latest import _enrich_geoglows_reach_if_missing, _enrich_usgs_station_if_missing
 from app.services.ingestion_service import append_timeseries, tracked_run
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,8 @@ async def run(db: Session, provider_id: str | None = None) -> None:
 
             for raw in records:
                 try:
-                    observations = adapter.normalize_observation(raw)
+                    normalized = adapter.normalize_observation(raw)
+                    observations = normalized if isinstance(normalized, list) else [normalized]
                     for obs in observations:
                         try:
                             inserted = append_timeseries(db, obs)
@@ -47,6 +48,8 @@ async def run(db: Session, provider_id: str | None = None) -> None:
                             recovered = False
                             if adapter.provider_id == "usgs" and "entity missing for observation" in str(exc):
                                 recovered = await _enrich_usgs_station_if_missing(db, adapter, obs)
+                            elif adapter.provider_id == "geoglows" and "entity missing for observation" in str(exc):
+                                recovered = await _enrich_geoglows_reach_if_missing(db, adapter, raw, obs)
                             if recovered:
                                 try:
                                     inserted = append_timeseries(db, obs)

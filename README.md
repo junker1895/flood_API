@@ -100,6 +100,39 @@ Notes/limitations:
 - If site/bbox/state are all unset and `USGS_DEFAULT_SITE_LIST` is configured, that default site list is used as a fallback selector.
 - Parameter mappings are currently limited to `00060` and `00065`; other USGS parameters are preserved in raw payload but skipped for normalized observations.
 
+## GEOGLOWS modeled ingestion
+- GEOGLOWS now uses real API-backed modeled reach ingestion for metadata, latest forecast discharge, and historical/reanalysis discharge timeseries.
+- Reach metadata ingestion is normalized into `reaches` with deterministic IDs (`geoglows-<provider_reach_id>`), source type `modeled`, lat/lon, optional geometry, and raw payload traceability.
+- Latest sync fetches provider forecast statistics per reach, writes `observation_latest`, and appends modeled timeseries rows as `property=discharge` with `is_forecast=true`.
+- History sync fetches GEOGLOWS historical simulation/reanalysis series and appends only new rows (idempotent reruns are preserved by existing unique constraints).
+- Provider-specific forecast/reanalysis context is preserved under `raw_payload.meta`.
+
+GEOGLOWS configuration env vars:
+
+```bash
+GEOGLOWS_API_BASE_URL=https://geoglows.ecmwf.int
+GEOGLOWS_API_KEY=                      # optional token/key
+GEOGLOWS_REACH_IDS=1001,1002          # recommended: explicit reach scope
+GEOGLOWS_REGION=                       # optional; used with catalog endpoint if reach list unset
+GEOGLOWS_MAX_REACHES=200              # safety cap on discovered reach count
+GEOGLOWS_HISTORY_LOOKBACK_DAYS=7
+GEOGLOWS_TIMEOUT_SECONDS=30
+GEOGLOWS_TRUST_ENV=true
+
+# advanced endpoint overrides
+GEOGLOWS_CATALOG_ENDPOINT=/api/AvailableData/
+GEOGLOWS_REACH_METADATA_ENDPOINT=/api/GetReachInfo/
+GEOGLOWS_LATEST_ENDPOINT=/api/ForecastStats/
+GEOGLOWS_LATEST_FALLBACK_ENDPOINTS=/api/ForecastEnsembles/
+GEOGLOWS_HISTORY_ENDPOINT=/api/HistoricSimulation/
+```
+
+Notes/limitations:
+- GEOGLOWS does not expose one guaranteed universal catalog contract across deployments; this integration supports configured reach IDs first and uses catalog discovery as a best-effort fallback.
+- Reach geometry/name/country coverage depends on the specific metadata payload returned by the configured GEOGLOWS deployment/endpoints.
+- If metadata endpoints are unavailable for a discovered reach, ingestion still proceeds with deterministic reach ID and provider reach ID, preserving partial metadata in raw payload.
+- Latest/history ingestion is resilient per-reach: a 4xx/5xx for one reach is logged and skipped instead of aborting the full provider run.
+
 ## Provider-level ingestion scheduling
 - Scheduler dispatch is provider-scoped (`provider_id + job_type`) instead of one global job per job type.
 - A provider must be enabled and the job must be both supported and enabled to be scheduled.
