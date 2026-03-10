@@ -294,14 +294,6 @@ def test_http_client_defaults_to_not_trusting_env_proxy(monkeypatch):
     adapter = USGSAdapter()
     assert adapter.http_trust_env is False
 
-        async def get(self, url, params=None):
-            if "site" in url:
-                return FakeResponse(text="""agency_cd	site_no	station_nm
-5s	15s	50s
-USGS	01646500	A
-USGS	01651000	B""")
-            payload = {"value": {"timeSeries": [{"sourceInfo": {"siteCode": [{"value": "01646500"}]}, "variable": {"variableCode": [{"value": "00060"}], "unit": {"unitCode": "ft3/s"}}, "values": [{"value": []}]}, {"sourceInfo": {"siteCode": [{"value": "01651000"}]}, "variable": {"variableCode": [{"value": "00065"}], "unit": {"unitCode": "ft"}}, "values": [{"value": []}]}]}}
-            return FakeResponse(payload=payload)
 
 def test_http_client_can_trust_env_proxy_when_enabled(monkeypatch):
     monkeypatch.setenv("USGS_TRUST_ENV", "true")
