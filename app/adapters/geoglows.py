@@ -51,6 +51,14 @@ class GeoglowsAdapter(BaseAdapter):
             )
             self.forecast_date = ""
 
+        self.forecast_date = (os.getenv("GEOGLOWS_FORECAST_DATE") or "").strip()
+        if self.forecast_date and not self._valid_yyyymmdd(self.forecast_date):
+            logger.warning(
+                "geoglows invalid GEOGLOWS_FORECAST_DATE=%s; ignoring and requesting latest forecast",
+                self.forecast_date,
+            )
+            self.forecast_date = ""
+
         self.reach_metadata_endpoint = os.getenv("GEOGLOWS_REACH_METADATA_ENDPOINT", "/api/GetReachInfo/")
         self.reach_catalog_endpoint = os.getenv("GEOGLOWS_CATALOG_ENDPOINT", "/api/AvailableData/")
 
@@ -67,10 +75,6 @@ class GeoglowsAdapter(BaseAdapter):
             return True
         except ValueError:
             return False
-
-    @classmethod
-    def _valid_river_id(cls, value: str) -> bool:
-        return value.isdigit() and len(value) == 9 and value not in cls._KNOWN_PLACEHOLDER_RIVER_IDS
 
     @staticmethod
     def _parse_csv(value: str | None) -> list[str]:
@@ -195,6 +199,32 @@ class GeoglowsAdapter(BaseAdapter):
             response = await client.get(url, params=params, headers=self._headers())
             response.raise_for_status()
             return response.json()
+
+
+    @staticmethod
+    def _unwrap_metadata_payload(payload: Any) -> dict | None:
+        if isinstance(payload, dict):
+            if payload.get("data") and isinstance(payload.get("data"), dict):
+                return payload["data"]
+            if payload.get("data") and isinstance(payload.get("data"), list) and payload["data"] and isinstance(payload["data"][0], dict):
+                return payload["data"][0]
+            return payload
+        if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+            return payload[0]
+        return None
+
+    @staticmethod
+    def _metadata_geo_score(raw: dict | None) -> int:
+        if not isinstance(raw, dict):
+            return 0
+        score = 0
+        if isinstance(raw.get("geometry"), dict):
+            score += 2
+        lat = raw.get("lat") or raw.get("latitude") or raw.get("y")
+        lon = raw.get("lon") or raw.get("lng") or raw.get("longitude") or raw.get("x")
+        if lat is not None and lon is not None:
+            score += 1
+        return score
 
     def _extract_reach_ids(self, payload: Any) -> list[str]:
         if isinstance(payload, list):
@@ -343,28 +373,33 @@ class GeoglowsAdapter(BaseAdapter):
         return await self._request_json_url(url)
 
     async def fetch_reach_by_id(self, provider_reach_id: str) -> dict | None:
-        try:
-            payload = await self._request_json_legacy(self.reach_metadata_endpoint, params={"river_id": provider_reach_id})
-        except (httpx.HTTPError, TimeoutError) as exc:
-            logger.info(
-                "geoglows metadata best-effort failed for river_id=%s endpoint=%s: %s",
-                provider_reach_id,
-                self.reach_metadata_endpoint,
-                exc,
-            )
+        candidates: list[dict] = []
+        for params in ({"river_id": provider_reach_id}, {"reach_id": provider_reach_id}):
+            try:
+                payload = await self._request_json_legacy(self.reach_metadata_endpoint, params=params)
+            except (httpx.HTTPError, TimeoutError) as exc:
+                logger.info(
+                    "geoglows metadata best-effort failed for river_id=%s endpoint=%s params=%s: %s",
+                    provider_reach_id,
+                    self.reach_metadata_endpoint,
+                    params,
+                    exc,
+                )
+                continue
+
+            unwrapped = self._unwrap_metadata_payload(payload)
+            if isinstance(unwrapped, dict):
+                unwrapped.setdefault("river_id", provider_reach_id)
+                unwrapped.setdefault("reach_id", provider_reach_id)
+                candidates.append(unwrapped)
+
+        if not candidates:
             return None
 
-        if isinstance(payload, dict):
-            if payload.get("river_id") or payload.get("reach_id") or payload.get("id") or payload.get("comid") or payload.get("link_no") or payload.get("LINKNO"):
-                return payload
-            data = payload.get("data")
-            if isinstance(data, dict):
-                return data
-            if isinstance(data, list) and data and isinstance(data[0], dict):
-                return data[0]
-        if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-            return payload[0]
-        return None
+        best = max(candidates, key=self._metadata_geo_score)
+        if self._metadata_geo_score(best) == 0:
+            logger.info("geoglows metadata returned no geometry/latlon for river_id=%s", provider_reach_id)
+        return best
 
     async def fetch_reach_catalog(self) -> list[dict]:
         reach_ids = list(dict.fromkeys(self._configured_river_ids()))

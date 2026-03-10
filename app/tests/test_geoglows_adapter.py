@@ -139,7 +139,7 @@ def test_metadata_best_effort_does_not_block_latest(monkeypatch):
 
     import asyncio
 
-    items = asyncio.run(adapter.fetch_latest_observations())
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
     assert len(items) == 1
     assert items[0]["reach_id"] == "902800057"
@@ -170,3 +170,31 @@ def test_invalid_configured_ids_are_filtered(monkeypatch):
     assert len(items) == 1
     assert any("/forecaststats/902800057" in url for url in seen)
     assert all("1001" not in url and "123456789" not in url for url in seen)
+
+
+
+def test_fetch_reach_by_id_prefers_metadata_with_geometry(monkeypatch):
+    adapter = GeoglowsAdapter()
+
+    async def fake_legacy(endpoint, params=None):
+        assert endpoint == adapter.reach_metadata_endpoint
+        if params == {"river_id": "902800057"}:
+            return {"river_id": "902800057"}
+        if params == {"reach_id": "902800057"}:
+            return {
+                "reach_id": "902800057",
+                "lat": 1.0,
+                "lon": 2.0,
+                "geometry": {"type": "LineString", "coordinates": [[2.0, 1.0], [2.1, 1.1]]},
+            }
+        raise AssertionError("unexpected params")
+
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
+
+    import asyncio
+
+    row = asyncio.run(adapter.fetch_reach_by_id("902800057"))
+
+    assert row is not None
+    assert row.get("geometry", {}).get("type") == "LineString"
+    assert row.get("river_id") == "902800057"
