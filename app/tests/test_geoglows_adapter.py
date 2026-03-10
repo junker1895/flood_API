@@ -116,10 +116,11 @@ def test_fetch_historical_timeseries_v2_retrospective_columnar(monkeypatch):
 
     import asyncio
 
-    records = asyncio.run(adapter.fetch_historical_timeseries())
+    items = asyncio.run(adapter.fetch_latest_observations())
 
-    assert len(records) == 2
-    assert all(r["series_type"] == "reanalysis" for r in records)
+    assert len(items) == 1
+    assert items[0]["flow"] == 4.2
+    assert items[0]["meta"]["product"] == "forecastensemble"
 
 
 def test_metadata_best_effort_does_not_block_latest(monkeypatch):
@@ -139,7 +140,7 @@ def test_metadata_best_effort_does_not_block_latest(monkeypatch):
 
     import asyncio
 
-    items = asyncio.run(adapter.fetch_latest_observations())
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
     assert len(items) == 1
     assert items[0]["reach_id"] == "902800057"
@@ -165,7 +166,7 @@ def test_invalid_configured_ids_are_filtered(monkeypatch):
 
     import asyncio
 
-    items = asyncio.run(adapter.fetch_latest_observations())
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
     assert len(items) == 1
     assert any("/forecaststats/902800057" in url for url in seen)
