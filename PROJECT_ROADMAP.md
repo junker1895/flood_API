@@ -1,134 +1,317 @@
-# Flood API Implementation Roadmap (Aligned)
+FloodWatch / Flood API — Updated Implementation Roadmap
+System Goal
 
-This roadmap translates the proposed workstreams into repository-ready phases and calls out conflicts with the current implementation so execution can proceed without churn.
+Build a global flood situational awareness platform that combines:
 
-## Current-state alignment summary
+river observations
+river forecasts
+rainfall
+flood thresholds
+basin context
 
-The proposed plan is directionally correct and matches the architecture in this repository:
-- observed station providers (`stations`) and modeled reach providers (`reaches`) are already separated
-- warning and threshold models already exist
-- provider adapters and ingestion jobs already follow an extensible pattern
+to explain:
 
-## Conflict and dependency notes
+what is happening
+why it is happening
+what will happen next
+Phase A — Core ingestion hardening
 
-### 1) Provider completion should account for actual current support
-- **USGS** is currently hard-coded to one station (`01646500`) in both metadata and latest ingestion; scaling to bbox/region/config list is required.
-- **EA England** currently ingests levels and warnings; warning geometry/timing/relationships are not yet persisted to first-class warning columns.
-- **GEOGLOWS** is still a static demo response and must be replaced with real API integration.
+(highest priority)
 
-**Execution impact:** no conflict with architecture; this is straightforward hardening work.
+Goal: ensure ingestion is reliable, scalable, and provider-agnostic.
 
-### 2) Reliability work has one scheduling conflict to resolve early
-Current scheduler intervals are global hard-coded jobs (metadata/latest/history/thresholds/warnings) rather than per-provider polling intervals.
+1. USGS provider completion
 
-**Conflict:** adding provider-level intervals later without first introducing provider-aware schedule config risks rework.
+Current state:
 
-**Resolution:** in Phase A, add provider-level schedule config and migrate jobs to provider-scoped dispatch.
+single station fallback
 
-### 3) Forecast model expansion should avoid premature table split
-The schema already has `is_forecast` plus raw payload storage and can support an MVP for GloFAS/GEOGLOWS.
+partial history
 
-**Conflict:** introducing dedicated forecast tables too early would duplicate ingestion logic before forecast access patterns are validated.
+Required work:
 
-**Resolution:** ship forecast metadata fields first; defer dedicated forecast tables until query/performance requirements prove necessary.
+station discovery across all states
+multi-state request handling
+deduplication of station results
+configurable station selectors
+true historical ingestion
+improved metadata normalization
+unit normalization
 
-### 4) Threshold and warning workstreams overlap (good) but need one shared normalization contract
-Threshold severity/status and warning severity/status should use a shared canonical mapping to avoid provider-specific drift.
+Expected output:
 
-**Conflict:** implementing these independently can create inconsistent frontend semantics.
-
-**Resolution:** define one normalization matrix for severity/status in Phase B and reuse across both jobs.
-
-### 5) Flood-products subsystem is correct, but must remain decoupled from station/reach APIs
-GFMS/Copernicus products do not fit point/reach timeseries cleanly.
-
-**Conflict:** forcing flood-product assets into existing observation tables would complicate current APIs and degrade model clarity.
-
-**Resolution:** add a separate flood-products schema and routes in Phase D.
-
-### 6) Discovery feeds (WHOS/GSIM/GRDC) should remain non-blocking
-Using these as initial live ingestion sources would slow delivery of core capabilities.
-
-**Conflict:** prioritizing discovery before provider hardening reduces near-term user value.
-
-**Resolution:** keep discovery as Phase E metadata enrichment and provider-discovery support.
-
-## Agreed phase order
-
-## Phase A — Core hardening (highest priority)
-1. USGS completion
-   - station catalog via bbox/region/configured list
-   - latest stage/discharge from real station sets
-   - true historical ingestion (not latest replay)
-   - improved station metadata normalization and unit handling
+~10,000 USGS gauges
+stage + discharge
+5–15 min updates
 2. EA England completion
-   - persist warning geometry and warning timing
-   - complete station history ingestion
-   - normalize warning severity/status and link warnings to related entities where possible
-   - support both level and flow observations where available
+
+Current state:
+
+levels ingesting
+
+warnings ingesting
+
+geometry partially handled
+
+Required work:
+
+persist warning geometry
+persist warning start/end times
+normalize warning severity/status
+support both flow and level observations
+link warnings to stations/reaches
+complete history ingestion
 3. GEOGLOWS completion
-   - replace demo responses with real integration
-   - ingest reach metadata + geometry + stable provider reach IDs
-   - ingest forecast discharge and available historical/reanalysis series
-4. Cross-provider reliability
-   - provider-scoped timeout/retry policies
-   - clearer per-provider logs and ingestion-run summaries
-   - provider-level failure isolation
-   - idempotent upserts retained and verified
-   - provider-level polling intervals
-5. Normalization tightening
-   - strict provider ID conventions
-   - UTC timestamp normalization guarantees
-   - observed vs modeled and forecast vs analysis distinctions
-   - preserve raw payloads for traceability
 
-## Phase B — Gauge expansion and warning/threshold quality
-1. BoM Australia provider
-   - station catalog
-   - latest level and discharge where available
-   - threshold/flood class ingestion where available
-2. Threshold hardening
-   - threshold type normalization and severity ordering
-   - station/reach/provider mapping consistency
-   - support multi-band thresholds
-3. Warning hardening completion
-   - polygon persistence and effective start/end support
-   - normalized severity/status contract
+Current state:
 
-## Phase C — Modeled forecast expansion
-1. Add GloFAS provider
-   - modeled reach/point mapping to internal reaches
-   - forecast discharge ingestion and forecast metadata
-2. Forecast-aware schema upgrades
-   - add lead-time, forecast reference-time, and timeseries-kind fields
-   - keep ensemble detail in raw payload initially
-3. Reach API enhancements for forecast use cases
+demo placeholder
 
-## Phase D — Flood products subsystem
-1. Add new models/routes
-   - `flood_products`
-   - `flood_product_assets`
-   - `flood_product_areas`
-2. Integrate first feeds
-   - GFMS
-   - Copernicus GFM
-3. Later candidate
-   - Google Flood Forecasting (subject to access)
+Required work:
 
-## Phase E — Discovery and metadata expansion
-1. WHOS-driven provider discovery workflow
-2. GSIM/GRDC-style station metadata enrichment
-3. Additional national provider rollout using the hardened adapter template
+real API integration
+reach metadata ingestion
+reach geometry persistence
+stable reach IDs
+forecast discharge ingestion
+reanalysis time series ingestion
+4. Provider-level scheduling
 
-## Repository update checklist
+Current state:
 
-- [ ] Add provider-level schedule configuration and dispatch
-- [ ] Upgrade adapters: USGS, EA England, GEOGLOWS
-- [ ] Implement true history ingestion path
-- [ ] Implement threshold ingestion pipeline
-- [ ] Add warning geometry/timing normalization persistence
-- [ ] Add BoM provider
-- [ ] Add GloFAS provider + forecast metadata fields
-- [ ] Add flood-products subsystem (models + routes)
-- [ ] Add capability metadata endpoint for frontend integration
+global ingestion schedule
 
+Required work:
+
+provider-specific polling intervals
+provider-scoped retries
+provider timeout configuration
+provider-level failure isolation
+structured ingestion logs
+5. Data normalization tightening
+
+Ensure consistency across providers.
+
+strict provider ID rules
+station/reach ID conventions
+UTC timestamp guarantees
+observed vs modeled distinction
+forecast vs analysis distinction
+unit normalization
+raw payload preservation
+Phase A.5 — Hydrograph usefulness
+
+(new phase)
+
+Goal: make gauges operationally useful.
+
+1. Historical backfill improvements
+minimum 3–7 days of observations
+efficient history ingestion
+incremental timeseries updates
+2. Hydrograph query optimization
+indexed timeseries queries
+efficient station history API
+Phase B — Flood intelligence layer
+
+(critical)
+
+Goal: convert observations into flood signals.
+
+1. Flood threshold ingestion
+
+Required fields:
+
+station_id
+threshold_value
+threshold_type
+severity_level
+
+Normalize severity levels:
+
+bankfull
+minor flood
+moderate flood
+major flood
+
+Providers:
+
+USGS
+EA England
+BoM
+other national agencies
+2. Warning normalization
+
+Persist and normalize warnings:
+
+warning polygons
+effective start/end
+severity/status normalization
+station/reach relationships
+Phase C — Forecast capability
+
+Goal: predict flood evolution.
+
+1. GEOGLOWS forecast integration
+reach forecasts
+forecast reference time
+lead times
+forecast metadata
+2. Add GloFAS provider
+reach mapping
+forecast ingestion
+lead-time metadata
+3. Forecast-aware schema upgrades
+
+Add fields:
+
+forecast_reference_time
+lead_time
+timeseries_kind
+ensemble metadata
+
+Ensemble detail can remain in raw payload initially.
+
+Phase C.5 — Rainfall layer
+
+(new phase)
+
+Goal: explain flood drivers.
+
+Required data
+rain_rate
+24h rainfall accumulation
+timestamp
+grid location
+Candidate feeds
+IMERG satellite rainfall
+GFS precipitation forecasts
+national radar mosaics
+
+Rainfall enables:
+
+upstream rainfall analysis
+flood cause identification
+Phase D — Flood products subsystem
+
+Flood extent products do not fit station/reach models.
+
+Create new models:
+
+flood_products
+flood_product_assets
+flood_product_areas
+Initial feeds
+GFMS
+Copernicus Global Flood Monitoring
+
+Possible future feed:
+
+Google Flood Forecasting
+
+(access permitting)
+
+Phase E — Global gauge expansion
+
+Once intelligence layers are working, expand coverage.
+
+Priority providers
+BoM Australia
+Canada HYDAT
+additional European agencies
+Brazil ANA
+Discovery feeds
+
+Used for metadata enrichment:
+
+WHOS
+GRDC
+GSIM
+
+These should not block core functionality.
+
+Phase F — Basin intelligence
+
+Goal: provide hydrologic context.
+
+Datasets:
+
+HydroBASINS
+HydroRIVERS
+
+Capabilities:
+
+upstream basin delineation
+basin rainfall aggregation
+river network analysis
+Phase G — Flood severity indicators
+
+Create derived signals combining layers:
+
+stage
+threshold exceedance
+rainfall
+forecast discharge
+
+Example output:
+
+Flood Severity Index
+0–5 scale
+
+This dramatically improves map usability.
+
+Repository update checklist
+
+Core infrastructure
+
+[ ] provider-level scheduling
+[ ] ingestion reliability improvements
+[ ] adapter normalization tightening
+
+Providers
+
+[ ] USGS completion
+[ ] EA England completion
+[ ] GEOGLOWS completion
+[ ] BoM provider
+[ ] GloFAS provider
+
+Hydrologic intelligence
+
+[ ] threshold ingestion pipeline
+[ ] warning geometry persistence
+[ ] rainfall ingestion layer
+
+Data systems
+
+[ ] hydrograph history improvements
+[ ] forecast metadata fields
+[ ] basin datasets integration
+
+Flood products
+
+[ ] flood_products schema
+[ ] GFMS ingestion
+[ ] Copernicus GFM ingestion
+
+Discovery
+
+[ ] WHOS integration
+[ ] GSIM / GRDC metadata enrichment
+Long-term platform outcome
+
+When the roadmap is complete the system will provide:
+
+global river observations
+global river forecasts
+global rainfall monitoring
+flood thresholds
+warning polygons
+basin context
+satellite flood detection
+
+Which enables a map that answers:
+
+Is flooding happening?
+Why is it happening?
+Where will it spread next?
