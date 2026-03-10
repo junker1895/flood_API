@@ -191,3 +191,36 @@ def test_invalid_configured_ids_are_filtered(monkeypatch):
     assert len(items) == 1
     assert all((params or {}).get("river_id") != "1001" for _, params in seen)
     assert any((params or {}).get("river_id") == "123456789" for _, params in seen)
+
+
+def test_fetch_reach_by_id_accepts_river_id_payload(monkeypatch):
+    adapter = GeoglowsAdapter()
+
+    async def fake_request_json(endpoint, params=None):
+        assert endpoint == adapter.reach_metadata_endpoint
+        assert params == {"river_id": "123456789"}
+        return {"river_id": "123456789", "lat": 4.2, "lon": 5.3}
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+
+    import asyncio
+
+    record = asyncio.run(adapter.fetch_reach_by_id("123456789"))
+
+    assert record is not None
+    assert record["river_id"] == "123456789"
+
+
+def test_fetch_reach_by_id_timeout_is_best_effort(monkeypatch):
+    adapter = GeoglowsAdapter()
+
+    async def fake_request_json(_endpoint, params=None):
+        raise TimeoutError("timeout")
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+
+    import asyncio
+
+    record = asyncio.run(adapter.fetch_reach_by_id("123456789"))
+
+    assert record is None
