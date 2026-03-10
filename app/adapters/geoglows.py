@@ -36,6 +36,10 @@ class GeoglowsAdapter(BaseAdapter):
         self.history_endpoint = os.getenv("GEOGLOWS_HISTORY_ENDPOINT", "/api/HistoricSimulation/")
 
     @staticmethod
+    def _valid_river_id(value: str) -> bool:
+        return value.isdigit() and len(value) == 9
+
+    @staticmethod
     def _parse_csv(value: str | None) -> list[str]:
         if not value:
             return []
@@ -150,6 +154,25 @@ class GeoglowsAdapter(BaseAdapter):
             output.append(str(candidate))
         return output
 
+    def _configured_river_ids(self) -> list[str]:
+        valid_ids: list[str] = []
+        invalid_ids: list[str] = []
+        for raw in self.reach_ids:
+            rid = str(raw).strip()
+            if self._valid_river_id(rid):
+                valid_ids.append(rid)
+            else:
+                invalid_ids.append(rid)
+
+        if invalid_ids:
+            logger.warning(
+                "geoglows configured river IDs contain invalid entries (expected 9-digit COMID/Link Number): invalid_ids=%s",
+                invalid_ids,
+            )
+        if valid_ids:
+            logger.info("geoglows using configured river IDs: river_ids=%s", valid_ids)
+        return valid_ids
+
     def _series_points(self, payload: Any, value_keys: tuple[str, ...]) -> list[tuple[datetime, float, dict[str, Any]]]:
         points: list[tuple[datetime, float, dict[str, Any]]] = []
 
@@ -188,10 +211,16 @@ class GeoglowsAdapter(BaseAdapter):
         return points
 
     async def fetch_reach_by_id(self, provider_reach_id: str) -> dict | None:
-        params = {"reach_id": provider_reach_id}
+        params = {"river_id": provider_reach_id}
         try:
             payload = await self._request_json(self.reach_metadata_endpoint, params=params)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.info(
+                "geoglows metadata best-effort failed for river_id=%s endpoint=%s: %s",
+                provider_reach_id,
+                self.reach_metadata_endpoint,
+                exc,
+            )
             return None
 
         if isinstance(payload, dict):
@@ -209,7 +238,7 @@ class GeoglowsAdapter(BaseAdapter):
         return None
 
     async def fetch_reach_catalog(self) -> list[dict]:
-        reach_ids = list(dict.fromkeys(self.reach_ids))
+        reach_ids = list(dict.fromkeys(self._configured_river_ids()))
         if not reach_ids:
             params: dict[str, Any] = {}
             if self.region_filter:
@@ -223,7 +252,20 @@ class GeoglowsAdapter(BaseAdapter):
                     exc,
                 )
                 return []
-            reach_ids = self._extract_reach_ids(payload)
+            discovered_ids = self._extract_reach_ids(payload)
+            reach_ids = [rid for rid in discovered_ids if self._valid_river_id(rid)]
+            invalid_discovered = [rid for rid in discovered_ids if not self._valid_river_id(rid)]
+            if invalid_discovered:
+                logger.warning(
+                    "geoglows catalog returned invalid river IDs (expected 9-digit COMID/Link Number): invalid_ids=%s",
+                    invalid_discovered,
+                )
+            logger.info(
+                "geoglows discovered river IDs from catalog endpoint=%s valid_count=%s invalid_count=%s",
+                self.reach_catalog_endpoint,
+                len(reach_ids),
+                len(invalid_discovered),
+            )
 
         records: list[dict] = []
         for rid in reach_ids[: self.max_reaches]:
@@ -261,6 +303,8 @@ class GeoglowsAdapter(BaseAdapter):
     async def fetch_latest_observations(self) -> list[dict]:
         reaches = await self.fetch_reach_catalog()
         collected: list[dict] = []
+        if not reaches:
+            logger.info("geoglows latest skipped: no valid configured/discovered river IDs available")
         for reach in reaches:
             rid = str(reach.get("reach_id") or reach.get("id") or reach.get("comid"))
             if not rid:
@@ -269,19 +313,29 @@ class GeoglowsAdapter(BaseAdapter):
             points: list[tuple[datetime, float, dict[str, Any]]] = []
             selected_endpoint: str | None = None
             for endpoint in self.latest_endpoints:
+                logger.info("geoglows latest requesting endpoint=%s river_id=%s", endpoint, rid)
                 try:
-                    payload = await self._request_json(endpoint, params={"reach_id": rid})
+                    payload = await self._request_json(endpoint, params={"river_id": rid})
                 except (httpx.HTTPError, TimeoutError) as exc:
-                    logger.warning("geoglows latest fetch failed for reach_id=%s endpoint=%s: %s", rid, endpoint, exc)
+                    logger.warning("geoglows latest endpoint failure river_id=%s endpoint=%s: %s", rid, endpoint, exc)
                     continue
 
                 points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "mean"))
+                logger.info(
+                    "geoglows latest parsed points river_id=%s endpoint=%s count=%s",
+                    rid,
+                    endpoint,
+                    len(points),
+                )
                 if points:
                     selected_endpoint = endpoint
                     break
 
             if not points:
-                logger.info("geoglows latest fetch yielded no parseable points for reach_id=%s", rid)
+                logger.info(
+                    "geoglows latest yielded zero parseable points for river_id=%s (invalid ID or empty payload)",
+                    rid,
+                )
                 continue
 
             dt, flow, point_raw = max(points, key=lambda item: item[0])
@@ -300,22 +354,34 @@ class GeoglowsAdapter(BaseAdapter):
         reaches = await self.fetch_reach_catalog()
         start = datetime.now(UTC) - timedelta(days=self.history_lookback_days)
         records: list[dict] = []
+        if not reaches:
+            logger.info("geoglows history skipped: no valid configured/discovered river IDs available")
         for reach in reaches:
             rid = str(reach.get("reach_id") or reach.get("id") or reach.get("comid"))
             if not rid:
                 continue
+            logger.info("geoglows history requesting endpoint=%s river_id=%s", self.history_endpoint, rid)
             try:
                 payload = await self._request_json(
                     self.history_endpoint,
-                    params={"reach_id": rid, "start_date": start.date().isoformat()},
+                    params={"river_id": rid, "start_date": start.date().isoformat()},
                 )
             except (httpx.HTTPError, TimeoutError) as exc:
-                logger.warning("geoglows history fetch failed for reach_id=%s endpoint=%s: %s", rid, self.history_endpoint, exc)
+                logger.warning("geoglows history endpoint failure river_id=%s endpoint=%s: %s", rid, self.history_endpoint, exc)
                 continue
 
             points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "simulated"))
+            logger.info(
+                "geoglows history parsed points river_id=%s endpoint=%s count=%s",
+                rid,
+                self.history_endpoint,
+                len(points),
+            )
             if not points:
-                logger.info("geoglows history fetch yielded no parseable points for reach_id=%s", rid)
+                logger.info(
+                    "geoglows history yielded zero parseable points for river_id=%s (invalid ID or empty payload)",
+                    rid,
+                )
                 continue
 
             for dt, flow, point_raw in points:
