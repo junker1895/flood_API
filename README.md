@@ -64,6 +64,39 @@ pytest
 python -m compileall app
 ```
 
+
+## USGS observed ingestion
+- Station discovery now uses USGS Water Services `site` endpoint (`format=rdb`) with configurable selection filters.
+- Latest and historical observed ingestion use USGS Water Services `iv` endpoint (`format=json`) across discovered station sets (not a single demo station).
+- Supported normalized variables: `discharge` (USGS `00060`) and `stage` (USGS `00065`).
+- Latest sync upserts `observation_latest` and appends to `observation_timeseries`; history sync appends true historical timeseries rows with idempotent conflict handling.
+- Station metadata includes provider station code, state/country, timezone, observed properties, drainage area (km²), datum metadata, and raw payload traceability.
+
+USGS configuration env vars:
+
+```bash
+# station selection
+USGS_SITE_LIST=01646500,01651000     # optional explicit site list
+USGS_STATE_CODES=24,51               # optional state filter
+USGS_BBOX=-78.0,38.0,-76.0,40.0      # optional bbox filter (west,south,east,north)
+
+# variable selection
+USGS_PARAMETER_CODES=00060,00065
+
+# history window
+USGS_HISTORY_LOOKBACK_DAYS=7
+USGS_HISTORY_START=2024-01-01T00:00:00+00:00  # optional explicit start
+USGS_HISTORY_END=2024-01-08T00:00:00+00:00    # optional explicit end
+
+# transport
+USGS_TIMEOUT_SECONDS=20
+USGS_TRUST_ENV=false  # set true only if your runtime must use HTTP(S)_PROXY env vars
+```
+
+Notes/limitations:
+- If no station selection filters are provided, USGS site discovery will use active stream stations with IV availability and may return a large catalog depending on upstream behavior.
+- Parameter mappings are currently limited to `00060` and `00065`; other USGS parameters are preserved in raw payload but skipped for normalized observations.
+
 ## Provider-level ingestion scheduling
 - Scheduler dispatch is provider-scoped (`provider_id + job_type`) instead of one global job per job type.
 - A provider must be enabled and the job must be both supported and enabled to be scheduled.
