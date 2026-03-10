@@ -51,22 +51,6 @@ class GeoglowsAdapter(BaseAdapter):
             )
             self.forecast_date = ""
 
-        self.forecast_date = (os.getenv("GEOGLOWS_FORECAST_DATE") or "").strip()
-        if self.forecast_date and not self._valid_yyyymmdd(self.forecast_date):
-            logger.warning(
-                "geoglows invalid GEOGLOWS_FORECAST_DATE=%s; ignoring and requesting latest forecast",
-                self.forecast_date,
-            )
-            self.forecast_date = ""
-
-        self.forecast_date = (os.getenv("GEOGLOWS_FORECAST_DATE") or "").strip()
-        if self.forecast_date and not self._valid_yyyymmdd(self.forecast_date):
-            logger.warning(
-                "geoglows invalid GEOGLOWS_FORECAST_DATE=%s; ignoring and requesting latest forecast",
-                self.forecast_date,
-            )
-            self.forecast_date = ""
-
         self.reach_metadata_endpoint = os.getenv("GEOGLOWS_REACH_METADATA_ENDPOINT", "/api/GetReachInfo/")
         self.reach_catalog_endpoint = os.getenv("GEOGLOWS_CATALOG_ENDPOINT", "/api/AvailableData/")
 
@@ -382,7 +366,11 @@ class GeoglowsAdapter(BaseAdapter):
 
     async def fetch_reach_by_id(self, provider_reach_id: str) -> dict | None:
         candidates: list[dict] = []
-        for params in ({"river_id": provider_reach_id}, {"reach_id": provider_reach_id}):
+        metadata_queries = [{"river_id": provider_reach_id}]
+        if self.fallback_to_reach_id:
+            metadata_queries.append({"reach_id": provider_reach_id})
+
+        for params in metadata_queries:
             try:
                 payload = await self._request_json_legacy(self.reach_metadata_endpoint, params=params)
             except (httpx.HTTPError, TimeoutError) as exc:

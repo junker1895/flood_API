@@ -125,6 +125,7 @@ GEOGLOWS_FORECAST_DATE=              # optional YYYYMMDD, blank = latest forecas
 # best-effort legacy metadata/catalog endpoints
 GEOGLOWS_CATALOG_ENDPOINT=/api/AvailableData/
 GEOGLOWS_REACH_METADATA_ENDPOINT=/api/GetReachInfo/
+GEOGLOWS_FALLBACK_TO_REACH_ID=true  # metadata only: try reach_id after river_id
 ```
 
 Notes/limitations:
@@ -132,7 +133,7 @@ Notes/limitations:
 - Placeholder demo values such as `123456789`/`987654321` are intentionally rejected.
 - Configured `GEOGLOWS_REACH_IDS` is the preferred integration path and is used before catalog discovery.
 - Catalog/metadata endpoints are best-effort only; latest/history ingestion does not depend on them for configured IDs.
-- Metadata best-effort retrieval may try both `river_id` and `reach_id` query params to maximize geometry/lat-lon coverage for reach map rendering.
+- Metadata best-effort retrieval first uses `river_id`; `reach_id` fallback is attempted only when `GEOGLOWS_FALLBACK_TO_REACH_ID=true` (default).
 - Forecast/history do not use `reach_id` fallback; metadata/catalog are best-effort only and not required for latest/history ingestion success.
 - If the catalog endpoint is unavailable (for example transient 5xx), sync runs continue safely and return no GEOGLOWS reaches unless `GEOGLOWS_REACH_IDS` is configured.
 - Reach geometry/name/country coverage depends on the specific metadata payload returned by the configured GEOGLOWS deployment/endpoints.
