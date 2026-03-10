@@ -102,3 +102,66 @@ def test_fetch_historical_timeseries_parses_reanalysis(monkeypatch):
 
     assert len(records) == 2
     assert all(r["series_type"] == "reanalysis" for r in records)
+
+
+def test_fetch_latest_observations_skips_failed_reach(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = ["1001", "1002"]
+
+    async def fake_request_json(endpoint, params=None):
+        rid = (params or {}).get("reach_id")
+        if endpoint == adapter.reach_metadata_endpoint:
+            return {"reach_id": rid}
+        if endpoint == adapter.latest_endpoint and rid == "1001":
+            raise Exception("500 error")
+        if endpoint == adapter.latest_endpoint and rid == "1002":
+            return {"data": [{"datetime": "2024-01-01T01:00:00Z", "flow": 3.4}]}
+        raise AssertionError("unexpected call")
+
+    async def wrapped(endpoint, params=None):
+        try:
+            return await fake_request_json(endpoint, params)
+        except Exception as exc:
+            import httpx
+
+            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500)) from exc
+
+    monkeypatch.setattr(adapter, "_request_json", wrapped)
+
+    import asyncio
+
+    items = asyncio.run(adapter.fetch_latest_observations())
+
+    assert len(items) == 1
+    assert items[0]["reach_id"] == "1002"
+
+
+def test_fetch_latest_observations_uses_fallback_endpoint(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = ["1001"]
+    adapter.latest_endpoints = ["/api/ForecastStats/", "/api/ForecastEnsembles/"]
+
+    calls = []
+
+    async def fake_request_json(endpoint, params=None):
+        calls.append(endpoint)
+        if endpoint == adapter.reach_metadata_endpoint:
+            return {"reach_id": "1001"}
+        if endpoint == "/api/ForecastStats/":
+            import httpx
+
+            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
+        if endpoint == "/api/ForecastEnsembles/":
+            return {"data": [{"datetime": "2024-01-01T02:00:00Z", "flow": 7.7}]}
+        raise AssertionError("unexpected call")
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+
+    import asyncio
+
+    items = asyncio.run(adapter.fetch_latest_observations())
+
+    assert len(items) == 1
+    assert items[0]["flow"] == 7.7
+    assert items[0]["meta"]["endpoint"] == "/api/ForecastEnsembles/"
+    assert "/api/ForecastStats/" in calls and "/api/ForecastEnsembles/" in calls

@@ -123,6 +123,7 @@ GEOGLOWS_TRUST_ENV=true
 GEOGLOWS_CATALOG_ENDPOINT=/api/AvailableData/
 GEOGLOWS_REACH_METADATA_ENDPOINT=/api/GetReachInfo/
 GEOGLOWS_LATEST_ENDPOINT=/api/ForecastStats/
+GEOGLOWS_LATEST_FALLBACK_ENDPOINTS=/api/ForecastEnsembles/
 GEOGLOWS_HISTORY_ENDPOINT=/api/HistoricSimulation/
 ```
 
@@ -130,6 +131,7 @@ Notes/limitations:
 - GEOGLOWS does not expose one guaranteed universal catalog contract across deployments; this integration supports configured reach IDs first and uses catalog discovery as a best-effort fallback.
 - Reach geometry/name/country coverage depends on the specific metadata payload returned by the configured GEOGLOWS deployment/endpoints.
 - If metadata endpoints are unavailable for a discovered reach, ingestion still proceeds with deterministic reach ID and provider reach ID, preserving partial metadata in raw payload.
+- Latest/history ingestion is resilient per-reach: a 4xx/5xx for one reach is logged and skipped instead of aborting the full provider run.
 
 ## Provider-level ingestion scheduling
 - Scheduler dispatch is provider-scoped (`provider_id + job_type`) instead of one global job per job type.

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import logging
 import os
 from typing import Any
 
@@ -7,6 +8,9 @@ import httpx
 from app.adapters.base import BaseAdapter, NormalizedObservation, NormalizedReach
 from app.core.ids import reach_id
 from app.core.quality import normalize_quality
+
+
+logger = logging.getLogger(__name__)
 
 
 class GeoglowsAdapter(BaseAdapter):
@@ -27,6 +31,8 @@ class GeoglowsAdapter(BaseAdapter):
         self.reach_catalog_endpoint = os.getenv("GEOGLOWS_CATALOG_ENDPOINT", "/api/AvailableData/")
         self.reach_metadata_endpoint = os.getenv("GEOGLOWS_REACH_METADATA_ENDPOINT", "/api/GetReachInfo/")
         self.latest_endpoint = os.getenv("GEOGLOWS_LATEST_ENDPOINT", "/api/ForecastStats/")
+        fallback_endpoints = self._parse_csv(os.getenv("GEOGLOWS_LATEST_FALLBACK_ENDPOINTS"))
+        self.latest_endpoints = [self.latest_endpoint, *[ep for ep in fallback_endpoints if ep != self.latest_endpoint]]
         self.history_endpoint = os.getenv("GEOGLOWS_HISTORY_ENDPOINT", "/api/HistoricSimulation/")
 
     @staticmethod
@@ -251,10 +257,25 @@ class GeoglowsAdapter(BaseAdapter):
             rid = str(reach.get("reach_id") or reach.get("id") or reach.get("comid"))
             if not rid:
                 continue
-            payload = await self._request_json(self.latest_endpoint, params={"reach_id": rid})
-            points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "mean"))
+
+            points: list[tuple[datetime, float, dict[str, Any]]] = []
+            selected_endpoint: str | None = None
+            for endpoint in self.latest_endpoints:
+                try:
+                    payload = await self._request_json(endpoint, params={"reach_id": rid})
+                except (httpx.HTTPError, TimeoutError) as exc:
+                    logger.warning("geoglows latest fetch failed for reach_id=%s endpoint=%s: %s", rid, endpoint, exc)
+                    continue
+
+                points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "mean"))
+                if points:
+                    selected_endpoint = endpoint
+                    break
+
             if not points:
+                logger.info("geoglows latest fetch yielded no parseable points for reach_id=%s", rid)
                 continue
+
             dt, flow, point_raw = max(points, key=lambda item: item[0])
             collected.append(
                 {
@@ -262,7 +283,7 @@ class GeoglowsAdapter(BaseAdapter):
                     "datetime": dt.isoformat(),
                     "flow": flow,
                     "series_type": "forecast",
-                    "meta": {"endpoint": self.latest_endpoint, "point": point_raw, "reach": reach},
+                    "meta": {"endpoint": selected_endpoint or self.latest_endpoint, "point": point_raw, "reach": reach},
                 }
             )
         return collected
@@ -275,11 +296,20 @@ class GeoglowsAdapter(BaseAdapter):
             rid = str(reach.get("reach_id") or reach.get("id") or reach.get("comid"))
             if not rid:
                 continue
-            payload = await self._request_json(
-                self.history_endpoint,
-                params={"reach_id": rid, "start_date": start.date().isoformat()},
-            )
+            try:
+                payload = await self._request_json(
+                    self.history_endpoint,
+                    params={"reach_id": rid, "start_date": start.date().isoformat()},
+                )
+            except (httpx.HTTPError, TimeoutError) as exc:
+                logger.warning("geoglows history fetch failed for reach_id=%s endpoint=%s: %s", rid, self.history_endpoint, exc)
+                continue
+
             points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "simulated"))
+            if not points:
+                logger.info("geoglows history fetch yielded no parseable points for reach_id=%s", rid)
+                continue
+
             for dt, flow, point_raw in points:
                 records.append(
                     {
