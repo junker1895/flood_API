@@ -1,4 +1,5 @@
 from app.ingestion import runner
+from app.ingestion.schedule import JobSchedule, JobType
 
 
 class FakeScheduler:
@@ -14,13 +15,15 @@ class FakeScheduler:
 
 
 def test_runner_bootstrap_executes_metadata_before_latest(monkeypatch):
-    executed: list[str] = []
+    executed: list[tuple[str, JobType]] = []
     fake_scheduler = FakeScheduler()
 
     monkeypatch.setattr(runner, "configure_logging", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(runner, "BlockingScheduler", lambda: fake_scheduler)
     monkeypatch.setattr(
-        runner, "_run_job_sync", lambda job_name, _job: executed.append(job_name)
+        runner,
+        "_run_provider_job_sync",
+        lambda provider_id, job_type, _job: executed.append((provider_id, job_type)),
     )
     monkeypatch.setattr(runner, "_wait_for_db_readiness", lambda: True)
     monkeypatch.setattr(runner, "_wait_for_schema_readiness", lambda: True)
@@ -28,9 +31,13 @@ def test_runner_bootstrap_executes_metadata_before_latest(monkeypatch):
 
     runner.main()
 
-    assert executed[:3] == ["sync_metadata", "sync_latest", "sync_warnings"]
+    assert [item[1] for item in executed[:3]] == [
+        JobType.METADATA,
+        JobType.METADATA,
+        JobType.METADATA,
+    ]
     assert fake_scheduler.started is True
-    assert len(fake_scheduler.jobs) == 5
+    assert len(fake_scheduler.jobs) == 8
 
 
 def test_wait_for_db_readiness_success(monkeypatch):
@@ -180,3 +187,15 @@ def test_runner_skips_bootstrap_when_schema_wait_times_out(monkeypatch):
 
     assert called["bootstrap"] == 0
     assert fake_scheduler.started is True
+
+
+def test_register_provider_job_uses_provider_interval(monkeypatch):
+    fake_scheduler = FakeScheduler()
+    schedule = JobSchedule(enabled=True, interval_minutes=42)
+
+    monkeypatch.setattr(runner, "_run_provider_job_sync", lambda *_args, **_kwargs: None)
+
+    runner._register_provider_job(fake_scheduler, "usgs", JobType.LATEST, schedule)
+
+    assert fake_scheduler.jobs[0][2]["minutes"] == 42
+    assert fake_scheduler.jobs[0][2]["id"] == "usgs:latest"

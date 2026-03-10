@@ -37,11 +37,18 @@ def _ensure_providers(db: Session) -> int:
     return created
 
 
-async def run(db: Session) -> None:
+def _adapter_jobs(provider_id: str | None):
+    adapters = [USGSAdapter(), EAEnglandAdapter()]
+    if provider_id is None:
+        return adapters
+    return [adapter for adapter in adapters if adapter.provider_id == provider_id]
+
+
+async def run(db: Session, provider_id: str | None = None) -> None:
     created = _ensure_providers(db)
     logger.info("sync_metadata providers ensured: created=%s", created)
 
-    for adapter in [USGSAdapter(), EAEnglandAdapter()]:
+    for adapter in _adapter_jobs(provider_id):
         with tracked_run(db, adapter.provider_id, "sync_metadata") as run_state:
             try:
                 records = await adapter.fetch_station_catalog()
@@ -88,6 +95,10 @@ async def run(db: Session) -> None:
             )
 
     g = GeoglowsAdapter()
+    if provider_id is not None and provider_id != g.provider_id:
+        db.commit()
+        logger.info("sync_metadata committed")
+        return
     with tracked_run(db, g.provider_id, "sync_metadata") as run_state:
         try:
             records = await g.fetch_reach_catalog()
