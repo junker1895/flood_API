@@ -159,8 +159,15 @@ async def _enrich_geoglows_reach_if_missing(db: Session, adapter: GeoglowsAdapte
     return True
 
 
-async def run(db: Session) -> None:
-    for adapter in [USGSAdapter(), EAEnglandAdapter(), GeoglowsAdapter()]:
+def _adapters(provider_id: str | None):
+    adapters = [USGSAdapter(), EAEnglandAdapter(), GeoglowsAdapter()]
+    if provider_id is None:
+        return adapters
+    return [adapter for adapter in adapters if adapter.provider_id == provider_id]
+
+
+async def run(db: Session, provider_id: str | None = None) -> None:
+    for adapter in _adapters(provider_id):
         if not db.is_active:
             db.rollback()
 

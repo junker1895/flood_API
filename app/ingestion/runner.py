@@ -16,10 +16,19 @@ from app.ingestion.jobs import (
     sync_thresholds,
     sync_warnings,
 )
+from app.ingestion.schedule import JobSchedule, JobType, get_enabled_provider_jobs
 
 logger = logging.getLogger(__name__)
 
 JobRunner = Callable[..., Awaitable[None]]
+
+JOB_RUNNERS: dict[JobType, JobRunner] = {
+    JobType.METADATA: sync_metadata,
+    JobType.LATEST: sync_latest,
+    JobType.HISTORY: sync_history,
+    JobType.THRESHOLDS: sync_thresholds,
+    JobType.WARNINGS: sync_warnings,
+}
 
 
 def _env_bool(name: str, default: bool = True) -> bool:
@@ -156,47 +165,77 @@ def _wait_for_db_readiness() -> bool:
             time.sleep(sleep_seconds)
 
 
-async def _run_job_once(job_name: str, job: JobRunner) -> None:
-    logger.info("job start: %s", job_name)
+async def _run_provider_job_once(
+    provider_id: str,
+    job_type: JobType,
+    job: JobRunner,
+) -> None:
+    started = time.monotonic()
+    logger.info("scheduled job start provider=%s job=%s", provider_id, job_type.value)
     with SessionLocal() as db:
-        await job.run(db)
-    logger.info("job finish: %s", job_name)
+        await job.run(db, provider_id=provider_id)
+    duration = time.monotonic() - started
+    logger.info(
+        "scheduled job finish provider=%s job=%s duration_seconds=%.3f status=success",
+        provider_id,
+        job_type.value,
+        duration,
+    )
 
 
-def _run_job_sync(job_name: str, job: JobRunner) -> None:
+def _run_provider_job_sync(provider_id: str, job_type: JobType, job: JobRunner) -> None:
+    started = time.monotonic()
     try:
-        asyncio.run(_run_job_once(job_name, job))
-    except Exception:
-        logger.exception("job failed: %s", job_name)
+        asyncio.run(_run_provider_job_once(provider_id, job_type, job))
+    except Exception as exc:
+        duration = time.monotonic() - started
+        logger.exception(
+            "scheduled job finish provider=%s job=%s duration_seconds=%.3f status=failure error=%s",
+            provider_id,
+            job_type.value,
+            duration,
+            str(exc)[:400],
+        )
 
 
 def _run_bootstrap() -> None:
-    bootstrap_jobs: list[tuple[str, JobRunner]] = [
-        ("sync_metadata", sync_metadata),
-        ("sync_latest", sync_latest),
-        ("sync_warnings", sync_warnings),
-    ]
+    bootstrap_order = [JobType.METADATA, JobType.LATEST, JobType.WARNINGS]
+    scheduled = get_enabled_provider_jobs()
     logger.info("bootstrap start")
-    for job_name, job in bootstrap_jobs:
-        _run_job_sync(job_name, job)
+    for job_type in bootstrap_order:
+        for provider_id, scheduled_job_type, _schedule in scheduled:
+            if scheduled_job_type != job_type:
+                continue
+            _run_provider_job_sync(provider_id, job_type, JOB_RUNNERS[job_type])
     logger.info("bootstrap finish")
 
 
 def _register_jobs(scheduler: BlockingScheduler) -> None:
+    for provider_id, job_type, schedule in get_enabled_provider_jobs():
+        _register_provider_job(scheduler, provider_id, job_type, schedule)
+
+
+def _register_provider_job(
+    scheduler: BlockingScheduler,
+    provider_id: str,
+    job_type: JobType,
+    schedule: JobSchedule,
+) -> None:
+    runner = JOB_RUNNERS[job_type]
     scheduler.add_job(
-        lambda: _run_job_sync("sync_metadata", sync_metadata), "interval", hours=24
+        lambda p=provider_id, jt=job_type, r=runner: _run_provider_job_sync(p, jt, r),
+        "interval",
+        minutes=schedule.interval_minutes,
+        id=f"{provider_id}:{job_type.value}",
+        replace_existing=True,
     )
-    scheduler.add_job(
-        lambda: _run_job_sync("sync_latest", sync_latest), "interval", minutes=10
-    )
-    scheduler.add_job(
-        lambda: _run_job_sync("sync_history", sync_history), "interval", hours=6
-    )
-    scheduler.add_job(
-        lambda: _run_job_sync("sync_thresholds", sync_thresholds), "interval", hours=24
-    )
-    scheduler.add_job(
-        lambda: _run_job_sync("sync_warnings", sync_warnings), "interval", minutes=30
+    logger.info(
+        "scheduler registered provider=%s job=%s interval_minutes=%s timeout_seconds=%s max_retries=%s",
+        provider_id,
+        job_type.value,
+        schedule.interval_minutes,
+        schedule.timeout_seconds,
+        schedule.max_retries,
     )
 
 
