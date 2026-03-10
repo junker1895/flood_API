@@ -59,6 +59,14 @@ class GeoglowsAdapter(BaseAdapter):
             )
             self.forecast_date = ""
 
+        self.forecast_date = (os.getenv("GEOGLOWS_FORECAST_DATE") or "").strip()
+        if self.forecast_date and not self._valid_yyyymmdd(self.forecast_date):
+            logger.warning(
+                "geoglows invalid GEOGLOWS_FORECAST_DATE=%s; ignoring and requesting latest forecast",
+                self.forecast_date,
+            )
+            self.forecast_date = ""
+
         self.reach_metadata_endpoint = os.getenv("GEOGLOWS_REACH_METADATA_ENDPOINT", "/api/GetReachInfo/")
         self.reach_catalog_endpoint = os.getenv("GEOGLOWS_CATALOG_ENDPOINT", "/api/AvailableData/")
 
@@ -456,6 +464,14 @@ class GeoglowsAdapter(BaseAdapter):
             **raw,
             "modeled_source_type": "geoglows_streamflow",
         }
+
+        if lat is None or lon is None:
+            has_line = isinstance(raw.get("geometry"), dict) and raw.get("geometry", {}).get("type") == "LineString"
+            if not has_line:
+                logger.info(
+                    "geoglows reach metadata missing geometry and lat/lon for river_id=%s; map endpoint may exclude this reach",
+                    provider_reach,
+                )
 
         return NormalizedReach(
             reach_id=reach_id(self.provider_id, provider_reach),

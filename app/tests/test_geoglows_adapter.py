@@ -116,10 +116,11 @@ def test_fetch_historical_timeseries_v2_retrospective_columnar(monkeypatch):
 
     import asyncio
 
-    records = asyncio.run(adapter.fetch_historical_timeseries())
+    items = asyncio.run(adapter.fetch_latest_observations())
 
-    assert len(records) == 2
-    assert all(r["series_type"] == "reanalysis" for r in records)
+    assert len(items) == 1
+    assert items[0]["flow"] == 4.2
+    assert items[0]["meta"]["product"] == "forecastensemble"
 
 
 def test_metadata_best_effort_does_not_block_latest(monkeypatch):
@@ -165,7 +166,7 @@ def test_invalid_configured_ids_are_filtered(monkeypatch):
 
     import asyncio
 
-    items = asyncio.run(adapter.fetch_latest_observations())
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
     assert len(items) == 1
     assert any("/forecaststats/902800057" in url for url in seen)
@@ -198,3 +199,28 @@ def test_fetch_reach_by_id_prefers_metadata_with_geometry(monkeypatch):
     assert row is not None
     assert row.get("geometry", {}).get("type") == "LineString"
     assert row.get("river_id") == "902800057"
+
+
+
+def test_metadata_best_effort_does_not_block_history(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = ["902800057"]
+    adapter.history_lookback_days = 36500
+
+    async def fake_url(url, params=None):
+        if "/retrospectivedaily/902800057" in url:
+            return {"datetime": ["2024-01-01"], "902800057": [3.4]}
+        raise AssertionError("unexpected v2 url")
+
+    async def fake_legacy(_endpoint, params=None):
+        raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
+
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
+
+    import asyncio
+
+    records = asyncio.run(adapter.fetch_historical_timeseries())
+
+    assert len(records) == 1
+    assert records[0]["flow"] == 3.4

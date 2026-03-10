@@ -136,6 +136,7 @@ Notes/limitations:
 - Forecast/history do not use `reach_id` fallback; metadata/catalog are best-effort only and not required for latest/history ingestion success.
 - If the catalog endpoint is unavailable (for example transient 5xx), sync runs continue safely and return no GEOGLOWS reaches unless `GEOGLOWS_REACH_IDS` is configured.
 - Reach geometry/name/country coverage depends on the specific metadata payload returned by the configured GEOGLOWS deployment/endpoints.
+- If `/v1/reaches/latest` has GEOGLOWS data but `/v1/reaches/map` is empty, check `reaches.geom`/lat/lon for those reaches; map queries require non-null geometry.
 - If metadata endpoints are unavailable for a discovered reach, ingestion still proceeds with deterministic reach ID and provider reach ID, preserving partial metadata in raw payload.
 - Latest/history ingestion is resilient per-reach: a 4xx/5xx for one reach is logged and skipped instead of aborting the full provider run.
 
