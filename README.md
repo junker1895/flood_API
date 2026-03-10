@@ -79,6 +79,7 @@ USGS configuration env vars:
 USGS_SITE_LIST=01646500,01651000     # optional explicit site list
 USGS_STATE_CODES=24,51               # optional state filter
 USGS_BBOX=-78.0,38.0,-76.0,40.0      # optional bbox filter (west,south,east,north)
+USGS_DEFAULT_BBOX=-125,24,-66,50     # used when site/state/bbox are all unset
 
 # variable selection
 USGS_PARAMETER_CODES=00060,00065
@@ -94,7 +95,7 @@ USGS_TRUST_ENV=false  # set true only if your runtime must use HTTP(S)_PROXY env
 ```
 
 Notes/limitations:
-- If no station selection filters are provided, USGS site discovery will use active stream stations with IV availability and may return a large catalog depending on upstream behavior.
+- If no station selection filters are provided, the adapter falls back to `USGS_DEFAULT_BBOX` to satisfy NWIS site-query requirements and avoid a 400 response.
 - Parameter mappings are currently limited to `00060` and `00065`; other USGS parameters are preserved in raw payload but skipped for normalized observations.
 
 ## Provider-level ingestion scheduling
