@@ -165,3 +165,43 @@ def test_fetch_latest_observations_uses_fallback_endpoint(monkeypatch):
     assert items[0]["flow"] == 7.7
     assert items[0]["meta"]["endpoint"] == "/api/ForecastEnsembles/"
     assert "/api/ForecastStats/" in calls and "/api/ForecastEnsembles/" in calls
+
+
+def test_fetch_reach_catalog_returns_empty_on_catalog_failure(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = []
+
+    async def fake_request_json(endpoint, params=None):
+        if endpoint == adapter.reach_catalog_endpoint:
+            import httpx
+
+            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
+        raise AssertionError("unexpected call")
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+
+    import asyncio
+
+    records = asyncio.run(adapter.fetch_reach_catalog())
+
+    assert records == []
+
+
+def test_fetch_latest_observations_returns_empty_when_catalog_fails(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = []
+
+    async def fake_request_json(endpoint, params=None):
+        if endpoint == adapter.reach_catalog_endpoint:
+            import httpx
+
+            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
+        raise AssertionError("unexpected call")
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+
+    import asyncio
+
+    items = asyncio.run(adapter.fetch_latest_observations())
+
+    assert items == []

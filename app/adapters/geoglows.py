@@ -214,7 +214,15 @@ class GeoglowsAdapter(BaseAdapter):
             params: dict[str, Any] = {}
             if self.region_filter:
                 params["region"] = self.region_filter
-            payload = await self._request_json(self.reach_catalog_endpoint, params=params or None)
+            try:
+                payload = await self._request_json(self.reach_catalog_endpoint, params=params or None)
+            except (httpx.HTTPError, TimeoutError) as exc:
+                logger.warning(
+                    "geoglows reach catalog fetch failed endpoint=%s: %s; returning empty catalog",
+                    self.reach_catalog_endpoint,
+                    exc,
+                )
+                return []
             reach_ids = self._extract_reach_ids(payload)
 
         records: list[dict] = []

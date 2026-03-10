@@ -129,6 +129,7 @@ GEOGLOWS_HISTORY_ENDPOINT=/api/HistoricSimulation/
 
 Notes/limitations:
 - GEOGLOWS does not expose one guaranteed universal catalog contract across deployments; this integration supports configured reach IDs first and uses catalog discovery as a best-effort fallback.
+- If the catalog endpoint is unavailable (for example transient 5xx), sync runs continue safely and return no GEOGLOWS reaches unless `GEOGLOWS_REACH_IDS` is configured.
 - Reach geometry/name/country coverage depends on the specific metadata payload returned by the configured GEOGLOWS deployment/endpoints.
 - If metadata endpoints are unavailable for a discovered reach, ingestion still proceeds with deterministic reach ID and provider reach ID, preserving partial metadata in raw payload.
 - Latest/history ingestion is resilient per-reach: a 4xx/5xx for one reach is logged and skipped instead of aborting the full provider run.
