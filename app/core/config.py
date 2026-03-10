@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     geoglows_poll_minutes: int = 30
 
     geoglows_api_key: str | None = None
+    geoglows_api_base_url: str = "https://geoglows.ecmwf.int"
+    geoglows_reach_ids: str | None = None
+    geoglows_region: str | None = None
+    geoglows_history_lookback_days: int = 7
+    geoglows_timeout_seconds: float = 30.0
 
     station_fresh_minutes: int = 30
     station_stale_minutes: int = 360
