@@ -16,6 +16,14 @@ USGS_PARAMETER_MAP: dict[str, str] = {
     "00065": "stage",
 }
 
+ALLOWED_USGS_STATES: list[str] = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+]
+
 US_STATE_FIPS_TO_POSTAL: dict[str, str] = {
     "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO", "09": "CT",
     "10": "DE", "11": "DC", "12": "FL", "13": "GA", "15": "HI", "16": "ID", "17": "IL",
@@ -37,15 +45,10 @@ class USGSAdapter(BaseAdapter):
         self.http_timeout_seconds = float(os.getenv("USGS_TIMEOUT_SECONDS", "20"))
         self.http_trust_env = os.getenv("USGS_TRUST_ENV", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.site_ids = self._parse_csv(os.getenv("USGS_SITE_LIST"))
+        self.default_site_ids = self._parse_csv(os.getenv("USGS_DEFAULT_SITE_LIST"))
         self.state_codes = self._parse_state_codes(os.getenv("USGS_STATE_CODES"))
         self.parameter_codes = self._parse_csv(os.getenv("USGS_PARAMETER_CODES")) or ["00060", "00065"]
         self.bbox = self._parse_bbox(os.getenv("USGS_BBOX"))
-        if not self.site_ids and not self.state_codes and self.bbox is None:
-            # NWIS site endpoint requires a location selector. Use a stable default site fallback
-            # first (predictable response size), then optional default bbox if configured.
-            self.site_ids = self._parse_csv(os.getenv("USGS_DEFAULT_SITE_LIST")) or ["01646500"]
-            if not self.site_ids:
-                self.bbox = self._parse_bbox(os.getenv("USGS_DEFAULT_BBOX", "-125,24,-66,50"))
         self.history_lookback_days = self._parse_int(os.getenv("USGS_HISTORY_LOOKBACK_DAYS"), default=7)
         self.history_start = self._parse_date(os.getenv("USGS_HISTORY_START"))
         self.history_end = self._parse_date(os.getenv("USGS_HISTORY_END"))
@@ -178,10 +181,58 @@ class USGSAdapter(BaseAdapter):
         return httpx.AsyncClient(timeout=self.http_timeout_seconds, trust_env=self.http_trust_env)
 
     async def fetch_station_catalog(self) -> list[dict]:
+        if self.site_ids:
+            async with self._http_client() as client:
+                r = await client.get(USGS_SITE_URL, params=self._station_query_params())
+                r.raise_for_status()
+            return self._parse_usgs_rdb(r.text)
+
+        if self.bbox is not None:
+            async with self._http_client() as client:
+                r = await client.get(USGS_SITE_URL, params=self._station_query_params())
+                r.raise_for_status()
+            return self._parse_usgs_rdb(r.text)
+
+        if self.state_codes:
+            states = self.state_codes
+        elif self.default_site_ids:
+            states = []
+        else:
+            states = ALLOWED_USGS_STATES
+
+        if self.default_site_ids and not states:
+            params = {
+                "format": "rdb",
+                "siteStatus": "active",
+                "siteType": "ST",
+                "hasDataTypeCd": "iv",
+                "sites": ",".join(self.default_site_ids),
+            }
+            async with self._http_client() as client:
+                r = await client.get(USGS_SITE_URL, params=params)
+                r.raise_for_status()
+            return self._parse_usgs_rdb(r.text)
+
+        rows: list[dict] = []
         async with self._http_client() as client:
-            r = await client.get(USGS_SITE_URL, params=self._station_query_params())
-            r.raise_for_status()
-        return self._parse_usgs_rdb(r.text)
+            for state in states:
+                params = {
+                    "format": "rdb",
+                    "siteStatus": "active",
+                    "siteType": "ST",
+                    "hasDataTypeCd": "iv",
+                    "stateCd": state,
+                }
+                r = await client.get(USGS_SITE_URL, params=params)
+                r.raise_for_status()
+                rows.extend(self._parse_usgs_rdb(r.text))
+
+        deduped_rows: dict[str, dict] = {}
+        for row in rows:
+            site_no = row.get("site_no")
+            if site_no:
+                deduped_rows[site_no] = row
+        return list(deduped_rows.values())
 
     def normalize_station(self, raw: dict) -> NormalizedStation:
         provider_station_id = raw.get("site_no", "")
