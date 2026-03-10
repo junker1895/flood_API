@@ -16,6 +16,17 @@ USGS_PARAMETER_MAP: dict[str, str] = {
     "00065": "stage",
 }
 
+US_STATE_FIPS_TO_POSTAL: dict[str, str] = {
+    "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO", "09": "CT",
+    "10": "DE", "11": "DC", "12": "FL", "13": "GA", "15": "HI", "16": "ID", "17": "IL",
+    "18": "IN", "19": "IA", "20": "KS", "21": "KY", "22": "LA", "23": "ME", "24": "MD",
+    "25": "MA", "26": "MI", "27": "MN", "28": "MS", "29": "MO", "30": "MT", "31": "NE",
+    "32": "NV", "33": "NH", "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND",
+    "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI", "45": "SC", "46": "SD",
+    "47": "TN", "48": "TX", "49": "UT", "50": "VT", "51": "VA", "53": "WA", "54": "WV",
+    "55": "WI", "56": "WY", "60": "AS", "66": "GU", "69": "MP", "72": "PR", "78": "VI",
+}
+
 
 class USGSAdapter(BaseAdapter):
     provider_id = "usgs"
@@ -25,7 +36,7 @@ class USGSAdapter(BaseAdapter):
     def __init__(self) -> None:
         self.http_timeout_seconds = float(os.getenv("USGS_TIMEOUT_SECONDS", "20"))
         self.site_ids = self._parse_csv(os.getenv("USGS_SITE_LIST"))
-        self.state_codes = self._parse_csv(os.getenv("USGS_STATE_CODES"))
+        self.state_codes = self._parse_state_codes(os.getenv("USGS_STATE_CODES"))
         self.parameter_codes = self._parse_csv(os.getenv("USGS_PARAMETER_CODES")) or ["00060", "00065"]
         self.bbox = self._parse_bbox(os.getenv("USGS_BBOX"))
         self.history_lookback_days = self._parse_int(os.getenv("USGS_HISTORY_LOOKBACK_DAYS"), default=7)
@@ -37,6 +48,21 @@ class USGSAdapter(BaseAdapter):
         if not value:
             return []
         return [item.strip() for item in value.split(",") if item.strip()]
+
+    @classmethod
+    def _parse_state_codes(cls, value: str | None) -> list[str]:
+        normalized: list[str] = []
+        for token in cls._parse_csv(value):
+            cleaned = token.strip().upper()
+            if not cleaned:
+                continue
+            if cleaned.isdigit():
+                cleaned = cleaned.zfill(2)
+                mapped = US_STATE_FIPS_TO_POSTAL.get(cleaned)
+                if mapped:
+                    cleaned = mapped
+            normalized.append(cleaned)
+        return normalized
 
     @staticmethod
     def _parse_int(value: str | None, default: int) -> int:

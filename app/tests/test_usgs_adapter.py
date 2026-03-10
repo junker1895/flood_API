@@ -87,7 +87,38 @@ def test_fetch_station_catalog_uses_state_filter(monkeypatch):
     adapter = USGSAdapter()
     rows = asyncio.run(adapter.fetch_station_catalog())
     assert rows[0]["site_no"] == "1"
-    assert captured["params"]["stateCd"] == "24,51"
+    assert captured["params"]["stateCd"] == "MD,VA"
+
+
+def test_fetch_station_catalog_accepts_postal_state_filter(monkeypatch):
+    monkeypatch.setenv("USGS_STATE_CODES", "md,va")
+    captured = {}
+
+    class FakeResponse:
+        text = "agency_cd\tsite_no\tstation_nm\n5s\t15s\t50s\nUSGS\t1\tA"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, _url, params=None):
+            captured["params"] = params
+            return FakeResponse()
+
+    monkeypatch.setattr("app.adapters.usgs.httpx.AsyncClient", FakeClient)
+    adapter = USGSAdapter()
+    rows = asyncio.run(adapter.fetch_station_catalog())
+    assert rows[0]["site_no"] == "1"
+    assert captured["params"]["stateCd"] == "MD,VA"
 
 
 def test_fetch_historical_timeseries_uses_time_window(monkeypatch):
