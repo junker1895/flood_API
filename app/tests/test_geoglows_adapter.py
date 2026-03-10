@@ -139,7 +139,7 @@ def test_metadata_best_effort_does_not_block_latest(monkeypatch):
 
     import asyncio
 
-    items = asyncio.run(adapter.fetch_latest_observations())
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
     assert len(items) == 1
     assert items[0]["reach_id"] == "902800057"
