@@ -263,6 +263,44 @@ def test_fetch_station_catalog_uses_default_site_list_when_configured(monkeypatc
     assert captured["params"]["sites"] == "01651000,01646500"
 
 
+def test_fetch_station_catalog_empty_state_codes_forces_nationwide_discovery(monkeypatch):
+    monkeypatch.delenv("USGS_SITE_LIST", raising=False)
+    monkeypatch.setenv("USGS_STATE_CODES", "")
+    monkeypatch.delenv("USGS_BBOX", raising=False)
+    monkeypatch.setenv("USGS_DEFAULT_SITE_LIST", "01651000")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, state):
+            self.text = f"agency_cd\tsite_no\tstation_nm\n5s\t15s\t50s\nUSGS\t{state}1\tA"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, _url, params=None):
+            calls.append(params)
+            return FakeResponse(params["stateCd"])
+
+    monkeypatch.setattr("app.adapters.usgs.httpx.AsyncClient", FakeClient)
+    adapter = USGSAdapter()
+    rows = asyncio.run(adapter.fetch_station_catalog())
+    assert len(rows) == 50
+    assert len(calls) == 50
+    assert calls[0]["stateCd"] == "AL"
+    assert calls[-1]["stateCd"] == "WY"
+    assert all("sites" not in call for call in calls)
+
+
 def test_fetch_historical_timeseries_uses_time_window(monkeypatch):
     monkeypatch.setenv("USGS_SITE_LIST", "01646500")
     monkeypatch.setenv("USGS_HISTORY_START", "2024-01-01T00:00:00+00:00")

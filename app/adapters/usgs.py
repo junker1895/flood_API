@@ -46,7 +46,9 @@ class USGSAdapter(BaseAdapter):
         self.http_trust_env = os.getenv("USGS_TRUST_ENV", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.site_ids = self._parse_csv(os.getenv("USGS_SITE_LIST"))
         self.default_site_ids = self._parse_csv(os.getenv("USGS_DEFAULT_SITE_LIST"))
-        self.state_codes = self._parse_state_codes(os.getenv("USGS_STATE_CODES"))
+        raw_state_codes = os.getenv("USGS_STATE_CODES")
+        self.state_codes_configured = raw_state_codes is not None
+        self.state_codes = self._parse_state_codes(raw_state_codes)
         self.parameter_codes = self._parse_csv(os.getenv("USGS_PARAMETER_CODES")) or ["00060", "00065"]
         self.bbox = self._parse_bbox(os.getenv("USGS_BBOX"))
         self.history_lookback_days = self._parse_int(os.getenv("USGS_HISTORY_LOOKBACK_DAYS"), default=7)
@@ -195,6 +197,8 @@ class USGSAdapter(BaseAdapter):
 
         if self.state_codes:
             states = self.state_codes
+        elif self.state_codes_configured:
+            states = ALLOWED_USGS_STATES
         elif self.default_site_ids:
             states = []
         else:
