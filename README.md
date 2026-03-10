@@ -125,6 +125,7 @@ GEOGLOWS_REACH_METADATA_ENDPOINT=/api/GetReachInfo/
 GEOGLOWS_LATEST_ENDPOINT=/api/ForecastStats/
 GEOGLOWS_LATEST_FALLBACK_ENDPOINTS=/api/ForecastEnsembles/
 GEOGLOWS_HISTORY_ENDPOINT=/api/HistoricSimulation/
+GEOGLOWS_FALLBACK_TO_REACH_ID=true  # try reach_id if river_id fails for a deployment
 ```
 
 Notes/limitations:
@@ -132,6 +133,7 @@ Notes/limitations:
 - Placeholder demo values such as `123456789`/`987654321` are intentionally rejected.
 - Configured `GEOGLOWS_REACH_IDS` is the preferred integration path and is used before catalog discovery.
 - Catalog/metadata endpoints are best-effort only; latest/history ingestion does not depend on them for configured IDs.
+- Requests are sent with `river_id` first; if enabled (`GEOGLOWS_FALLBACK_TO_REACH_ID=true`), the adapter retries with `reach_id` because some deployments still require `reach_id` for forecast/history routes.
 - If the catalog endpoint is unavailable (for example transient 5xx), sync runs continue safely and return no GEOGLOWS reaches unless `GEOGLOWS_REACH_IDS` is configured.
 - Reach geometry/name/country coverage depends on the specific metadata payload returned by the configured GEOGLOWS deployment/endpoints.
 - If metadata endpoints are unavailable for a discovered reach, ingestion still proceeds with deterministic reach ID and provider reach ID, preserving partial metadata in raw payload.

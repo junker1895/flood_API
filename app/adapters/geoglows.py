@@ -29,6 +29,7 @@ class GeoglowsAdapter(BaseAdapter):
         self.reach_ids = self._parse_csv(os.getenv("GEOGLOWS_REACH_IDS"))
         self.region_filter = os.getenv("GEOGLOWS_REGION")
         self.history_lookback_days = self._parse_int(os.getenv("GEOGLOWS_HISTORY_LOOKBACK_DAYS"), default=7)
+        self.fallback_to_reach_id = self._parse_bool(os.getenv("GEOGLOWS_FALLBACK_TO_REACH_ID"), default=True)
 
         self.reach_catalog_endpoint = os.getenv("GEOGLOWS_CATALOG_ENDPOINT", "/api/AvailableData/")
         self.reach_metadata_endpoint = os.getenv("GEOGLOWS_REACH_METADATA_ENDPOINT", "/api/GetReachInfo/")
@@ -40,10 +41,6 @@ class GeoglowsAdapter(BaseAdapter):
     @classmethod
     def _valid_river_id(cls, value: str) -> bool:
         return value.isdigit() and len(value) == 9 and value not in cls._KNOWN_PLACEHOLDER_RIVER_IDS
-
-    @staticmethod
-    def _valid_river_id(value: str) -> bool:
-        return value.isdigit() and len(value) == 9
 
     @staticmethod
     def _parse_csv(value: str | None) -> list[str]:
@@ -181,6 +178,12 @@ class GeoglowsAdapter(BaseAdapter):
             logger.info("geoglows using configured river IDs: river_ids=%s", valid_ids)
         return valid_ids
 
+    def _id_params(self, river_id: str) -> list[dict[str, str]]:
+        params = [{"river_id": river_id}]
+        if self.fallback_to_reach_id:
+            params.append({"reach_id": river_id})
+        return params
+
     def _series_points(self, payload: Any, value_keys: tuple[str, ...]) -> list[tuple[datetime, float, dict[str, Any]]]:
         points: list[tuple[datetime, float, dict[str, Any]]] = []
 
@@ -219,16 +222,20 @@ class GeoglowsAdapter(BaseAdapter):
         return points
 
     async def fetch_reach_by_id(self, provider_reach_id: str) -> dict | None:
-        params = {"river_id": provider_reach_id}
-        try:
-            payload = await self._request_json(self.reach_metadata_endpoint, params=params)
-        except (httpx.HTTPError, TimeoutError) as exc:
-            logger.info(
-                "geoglows metadata best-effort failed for river_id=%s endpoint=%s: %s",
-                provider_reach_id,
-                self.reach_metadata_endpoint,
-                exc,
-            )
+        payload = None
+        for params in self._id_params(provider_reach_id):
+            try:
+                payload = await self._request_json(self.reach_metadata_endpoint, params=params)
+                break
+            except (httpx.HTTPError, TimeoutError) as exc:
+                logger.info(
+                    "geoglows metadata best-effort failed for river_id=%s endpoint=%s params=%s: %s",
+                    provider_reach_id,
+                    self.reach_metadata_endpoint,
+                    params,
+                    exc,
+                )
+        if payload is None:
             return None
 
         if isinstance(payload, dict):
@@ -325,19 +332,28 @@ class GeoglowsAdapter(BaseAdapter):
             selected_endpoint: str | None = None
             endpoint_failed = False
             for endpoint in self.latest_endpoints:
-                logger.info("geoglows latest requesting endpoint=%s river_id=%s", endpoint, rid)
-                try:
-                    payload = await self._request_json(endpoint, params={"river_id": rid})
-                except (httpx.HTTPError, TimeoutError) as exc:
-                    endpoint_failed = True
-                    logger.warning("geoglows latest endpoint failure river_id=%s endpoint=%s: %s", rid, endpoint, exc)
+                payload = None
+                used_params: dict[str, str] | None = None
+                for params in self._id_params(rid):
+                    logger.info("geoglows latest requesting endpoint=%s river_id=%s params=%s", endpoint, rid, params)
+                    try:
+                        payload = await self._request_json(endpoint, params=params)
+                        used_params = params
+                        break
+                    except (httpx.HTTPError, TimeoutError) as exc:
+                        endpoint_failed = True
+                        logger.warning("geoglows latest endpoint failure river_id=%s endpoint=%s params=%s: %s", rid, endpoint, params, exc)
+                        continue
+
+                if payload is None:
                     continue
 
                 points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "mean"))
                 logger.info(
-                    "geoglows latest parsed points river_id=%s endpoint=%s count=%s",
+                    "geoglows latest parsed points river_id=%s endpoint=%s params=%s count=%s",
                     rid,
                     endpoint,
+                    used_params,
                     len(points),
                 )
                 if points:
@@ -377,14 +393,20 @@ class GeoglowsAdapter(BaseAdapter):
                 continue
             endpoint_failed = False
             logger.info("geoglows history requesting endpoint=%s river_id=%s", self.history_endpoint, rid)
-            try:
-                payload = await self._request_json(
-                    self.history_endpoint,
-                    params={"river_id": rid, "start_date": start.date().isoformat()},
-                )
-            except (httpx.HTTPError, TimeoutError) as exc:
-                endpoint_failed = True
-                logger.warning("geoglows history endpoint failure river_id=%s endpoint=%s: %s", rid, self.history_endpoint, exc)
+            payload = None
+            used_params: dict[str, str] | None = None
+            for id_params in self._id_params(rid):
+                params = {**id_params, "start_date": start.date().isoformat()}
+                try:
+                    payload = await self._request_json(self.history_endpoint, params=params)
+                    used_params = params
+                    break
+                except (httpx.HTTPError, TimeoutError) as exc:
+                    endpoint_failed = True
+                    logger.warning("geoglows history endpoint failure river_id=%s endpoint=%s params=%s: %s", rid, self.history_endpoint, params, exc)
+                    continue
+
+            if payload is None:
                 continue
 
             points = self._series_points(payload, value_keys=("flow", "streamflow", "discharge", "qout", "value", "simulated"))

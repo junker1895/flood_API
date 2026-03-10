@@ -252,3 +252,33 @@ def test_placeholder_configured_ids_are_rejected(monkeypatch):
     assert "123456789" not in requested_river_ids
     assert "111111111" not in requested_river_ids
     assert "902800057" in requested_river_ids
+
+
+
+def test_fetch_latest_observations_falls_back_to_reach_id_param(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = ["902800057"]
+    adapter.fallback_to_reach_id = True
+
+    calls: list[tuple[str, dict | None]] = []
+
+    async def fake_request_json(endpoint, params=None):
+        calls.append((endpoint, params))
+        if endpoint == adapter.reach_metadata_endpoint:
+            return {"reach_id": "902800057"}
+        if endpoint == adapter.latest_endpoint and params == {"river_id": "902800057"}:
+            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
+        if endpoint == adapter.latest_endpoint and params == {"reach_id": "902800057"}:
+            return {"data": [{"datetime": "2024-01-01T01:00:00Z", "flow": 4.2}]}
+        raise AssertionError("unexpected call")
+
+    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+
+    import asyncio
+
+    items = asyncio.run(adapter.fetch_latest_observations())
+
+    assert len(items) == 1
+    assert items[0]["flow"] == 4.2
+    assert (adapter.latest_endpoint, {"river_id": "902800057"}) in calls
+    assert (adapter.latest_endpoint, {"reach_id": "902800057"}) in calls
