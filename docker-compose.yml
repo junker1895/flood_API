@@ -19,6 +19,8 @@ services:
       context: .
       dockerfile: Dockerfile.api
     command: alembic upgrade head
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/hydrology
     depends_on:
@@ -29,6 +31,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/hydrology
     depends_on:
@@ -41,6 +45,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/hydrology
     depends_on:
