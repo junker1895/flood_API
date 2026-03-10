@@ -109,3 +109,13 @@ def upsert_latest_and_append_ts(db: Session, obs: NormalizedObservation) -> tupl
     ts_result = db.execute(_timeseries_insert_stmt(payload))
     inserted = 1 if ts_result.rowcount else 0
     return inserted, updated
+
+
+def append_timeseries(db: Session, obs: NormalizedObservation) -> int:
+    if not _entity_exists(db, obs):
+        raise ValueError(f"entity missing for observation: station_id={obs.station_id} reach_id={obs.reach_id}")
+
+    payload = obs.model_dump()
+    payload["ingested_at"] = utcnow()
+    ts_result = db.execute(_timeseries_insert_stmt(payload))
+    return 1 if ts_result.rowcount else 0
