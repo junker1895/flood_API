@@ -18,6 +18,8 @@ class GeoglowsAdapter(BaseAdapter):
     supports_reaches = True
     supports_history = True
 
+    _KNOWN_PLACEHOLDER_RIVER_IDS = {"000000000", "111111111", "123456789", "987654321"}
+
     def __init__(self) -> None:
         self.api_base_url = os.getenv("GEOGLOWS_API_BASE_URL", "https://geoglows.ecmwf.int").rstrip("/")
         self.api_key = os.getenv("GEOGLOWS_API_KEY") or os.getenv("GEOGLOWS_TOKEN")
@@ -34,6 +36,10 @@ class GeoglowsAdapter(BaseAdapter):
         fallback_endpoints = self._parse_csv(os.getenv("GEOGLOWS_LATEST_FALLBACK_ENDPOINTS"))
         self.latest_endpoints = [self.latest_endpoint, *[ep for ep in fallback_endpoints if ep != self.latest_endpoint]]
         self.history_endpoint = os.getenv("GEOGLOWS_HISTORY_ENDPOINT", "/api/HistoricSimulation/")
+
+    @classmethod
+    def _valid_river_id(cls, value: str) -> bool:
+        return value.isdigit() and len(value) == 9 and value not in cls._KNOWN_PLACEHOLDER_RIVER_IDS
 
     @staticmethod
     def _valid_river_id(value: str) -> bool:
@@ -165,9 +171,11 @@ class GeoglowsAdapter(BaseAdapter):
                 invalid_ids.append(rid)
 
         if invalid_ids:
+            placeholder_ids = [rid for rid in invalid_ids if rid in self._KNOWN_PLACEHOLDER_RIVER_IDS]
             logger.warning(
-                "geoglows configured river IDs contain invalid entries (expected 9-digit COMID/Link Number): invalid_ids=%s",
+                "geoglows configured river IDs contain invalid entries (must be real 9-digit COMID/Link Number, placeholders rejected): invalid_ids=%s placeholder_ids=%s",
                 invalid_ids,
+                placeholder_ids,
             )
         if valid_ids:
             logger.info("geoglows using configured river IDs: river_ids=%s", valid_ids)
@@ -256,9 +264,11 @@ class GeoglowsAdapter(BaseAdapter):
             reach_ids = [rid for rid in discovered_ids if self._valid_river_id(rid)]
             invalid_discovered = [rid for rid in discovered_ids if not self._valid_river_id(rid)]
             if invalid_discovered:
+                placeholder_discovered = [rid for rid in invalid_discovered if rid in self._KNOWN_PLACEHOLDER_RIVER_IDS]
                 logger.warning(
-                    "geoglows catalog returned invalid river IDs (expected 9-digit COMID/Link Number): invalid_ids=%s",
+                    "geoglows catalog returned invalid river IDs (must be real 9-digit COMID/Link Number, placeholders rejected): invalid_ids=%s placeholder_ids=%s",
                     invalid_discovered,
+                    placeholder_discovered,
                 )
             logger.info(
                 "geoglows discovered river IDs from catalog endpoint=%s valid_count=%s invalid_count=%s",

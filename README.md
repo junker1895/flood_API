@@ -112,7 +112,7 @@ GEOGLOWS configuration env vars:
 ```bash
 GEOGLOWS_API_BASE_URL=https://geoglows.ecmwf.int
 GEOGLOWS_API_KEY=                      # optional token/key
-GEOGLOWS_REACH_IDS=123456789,987654321 # preferred: valid 9-digit river IDs (COMID/Link Number)
+GEOGLOWS_REACH_IDS=<real_9_digit_comid_1>,<real_9_digit_comid_2> # preferred: real 9-digit COMID/Link Number values
 GEOGLOWS_REGION=                       # optional; used with catalog endpoint if reach list unset
 GEOGLOWS_MAX_REACHES=200              # safety cap on discovered reach count
 GEOGLOWS_HISTORY_LOOKBACK_DAYS=7
@@ -129,6 +129,7 @@ GEOGLOWS_HISTORY_ENDPOINT=/api/HistoricSimulation/
 
 Notes/limitations:
 - GEOGLOWS forecast/history functions require valid 9-digit river IDs (COMIDs / Link Numbers) passed as `river_id`; placeholder IDs like `1001` will be skipped as invalid.
+- Placeholder demo values such as `123456789`/`987654321` are intentionally rejected.
 - Configured `GEOGLOWS_REACH_IDS` is the preferred integration path and is used before catalog discovery.
 - Catalog/metadata endpoints are best-effort only; latest/history ingestion does not depend on them for configured IDs.
 - If the catalog endpoint is unavailable (for example transient 5xx), sync runs continue safely and return no GEOGLOWS reaches unless `GEOGLOWS_REACH_IDS` is configured.
