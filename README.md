@@ -34,18 +34,21 @@ Production-minded backend platform for ingesting global hydrology data from mult
    ```bash
    docker compose up --build -d
    ```
-3. Run migrations:
+3. Verify services:
+   - `migrate` runs automatically before `api`/`worker` start.
+   - API docs: http://localhost:8000/docs
+
+4. (Optional) re-run migrations manually:
    ```bash
    docker compose exec api alembic upgrade head
    ```
-4. API docs:
-   - http://localhost:8000/docs
 
 ## Run API / worker manually (without docker)
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[test]
+cp .env.example .env
 alembic upgrade head
 uvicorn app.api.main:app --reload
 # and in another shell
@@ -100,9 +103,9 @@ curl "http://localhost:8000/v1/thresholds?limit=5"
 - Health: `GET /health/live`, `GET /health/ready`, `GET /health/providers`
 
 ## Useful query params
-- `bbox=minLon,minLat,maxLon,maxLat` (stations)
+- `bbox=minLon,minLat,maxLon,maxLat` (stations, reaches, warnings, thresholds, and latest/map variants)
 - `provider_id`, `country_code`, `ids=id1,id2`
-- `property`, `updated_since`, `start`, `end`
+- `property`, `updated_since`, `start`, `end`, `include_latest`, `latest_property`
 - `limit`, `cursor`
 
 
