@@ -214,3 +214,150 @@ def test_warning_active_and_geometry(monkeypatch):
     row = r.json()["data"][0]
     assert row["geometry"]["type"] == "Polygon"
     assert row["related_station_ids"] == ["s1"]
+
+
+def test_stations_latest_provider_filter(monkeypatch):
+    import app.api.routes.stations as routes
+
+    now = datetime.now(UTC)
+
+    def fake_latest(db, property_name=None, provider_id=None, limit=100, bbox=None):
+        if provider_id == "ea_england":
+            return [
+                Obj(
+                    entity_type="station",
+                    station_id="ea_england-A1",
+                    reach_id=None,
+                    property="stage",
+                    observed_at=now,
+                    value_native=1.0,
+                    unit_native="m",
+                    value_canonical=1.0,
+                    unit_canonical="m",
+                    quality_code="verified",
+                    quality_score=None,
+                    aggregation=None,
+                    is_forecast=False,
+                    is_provisional=False,
+                    is_estimated=False,
+                    is_missing=False,
+                    is_flagged=False,
+                    provider_observation_id=None,
+                    ingested_at=now,
+                )
+            ]
+        return [
+            Obj(
+                entity_type="station",
+                station_id="ea_england-A1",
+                reach_id=None,
+                property="stage",
+                observed_at=now,
+                value_native=1.0,
+                unit_native="m",
+                value_canonical=1.0,
+                unit_canonical="m",
+                quality_code="verified",
+                quality_score=None,
+                aggregation=None,
+                is_forecast=False,
+                is_provisional=False,
+                is_estimated=False,
+                is_missing=False,
+                is_flagged=False,
+                provider_observation_id=None,
+                ingested_at=now,
+            ),
+            Obj(
+                entity_type="station",
+                station_id="usgs-01646500",
+                reach_id=None,
+                property="stage",
+                observed_at=now,
+                value_native=2.0,
+                unit_native="m",
+                value_canonical=2.0,
+                unit_canonical="m",
+                quality_code="verified",
+                quality_score=None,
+                aggregation=None,
+                is_forecast=False,
+                is_provisional=False,
+                is_estimated=False,
+                is_missing=False,
+                is_flagged=False,
+                provider_observation_id=None,
+                ingested_at=now,
+            ),
+        ]
+
+    monkeypatch.setattr(routes, "latest_for_stations", fake_latest)
+
+    c = _client()
+    r = c.get("/v1/stations/latest?provider_id=ea_england")
+
+    assert r.status_code == 200
+    station_ids = [row["station_id"] for row in r.json()["data"]]
+    assert station_ids == ["ea_england-A1"]
+
+
+def test_stations_latest_without_provider_filter_returns_all(monkeypatch):
+    import app.api.routes.stations as routes
+
+    now = datetime.now(UTC)
+
+    monkeypatch.setattr(
+        routes,
+        "latest_for_stations",
+        lambda *args, **kwargs: [
+            Obj(
+                entity_type="station",
+                station_id="ea_england-A1",
+                reach_id=None,
+                property="stage",
+                observed_at=now,
+                value_native=1.0,
+                unit_native="m",
+                value_canonical=1.0,
+                unit_canonical="m",
+                quality_code="verified",
+                quality_score=None,
+                aggregation=None,
+                is_forecast=False,
+                is_provisional=False,
+                is_estimated=False,
+                is_missing=False,
+                is_flagged=False,
+                provider_observation_id=None,
+                ingested_at=now,
+            ),
+            Obj(
+                entity_type="station",
+                station_id="usgs-01646500",
+                reach_id=None,
+                property="stage",
+                observed_at=now,
+                value_native=2.0,
+                unit_native="m",
+                value_canonical=2.0,
+                unit_canonical="m",
+                quality_code="verified",
+                quality_score=None,
+                aggregation=None,
+                is_forecast=False,
+                is_provisional=False,
+                is_estimated=False,
+                is_missing=False,
+                is_flagged=False,
+                provider_observation_id=None,
+                ingested_at=now,
+            ),
+        ],
+    )
+
+    c = _client()
+    r = c.get("/v1/stations/latest")
+
+    assert r.status_code == 200
+    station_ids = [row["station_id"] for row in r.json()["data"]]
+    assert station_ids == ["ea_england-A1", "usgs-01646500"]

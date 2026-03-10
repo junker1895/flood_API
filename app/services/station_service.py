@@ -59,15 +59,23 @@ def get_station(db: Session, station_id: str):
 def latest_for_stations(
     db: Session,
     property_name: str | None = None,
+    provider_id: str | None = None,
     limit: int = 100,
     bbox: tuple[float, float, float, float] | None = None,
 ) -> list[ObservationLatest]:
     stmt = select(ObservationLatest).where(ObservationLatest.station_id.is_not(None))
+    joined_station = False
     if property_name:
         stmt = stmt.where(ObservationLatest.property == property_name)
+    if provider_id:
+        stmt = stmt.join(Station, Station.station_id == ObservationLatest.station_id)
+        joined_station = True
+        stmt = stmt.where(Station.provider_id == provider_id)
     if bbox:
         min_lon, min_lat, max_lon, max_lat = bbox
-        stmt = stmt.join(Station, Station.station_id == ObservationLatest.station_id).where(
+        if not joined_station:
+            stmt = stmt.join(Station, Station.station_id == ObservationLatest.station_id)
+        stmt = stmt.where(
             Station.geom.is_not(None),
             func.ST_Intersects(Station.geom, func.ST_MakeEnvelope(min_lon, min_lat, max_lon, max_lat, 4326)),
         )

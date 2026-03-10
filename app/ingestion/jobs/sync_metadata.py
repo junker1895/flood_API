@@ -83,7 +83,13 @@ async def run(db: Session, provider_id: str | None = None) -> None:
                 except Exception as exc:  # keep run resilient to malformed records
                     run_state.records_failed += 1
                     run_state.error_summary = f"normalize_station failed: {exc!r}"[:4000]
-                    logger.warning("station normalization failed for %s: %s", adapter.provider_id, exc)
+                    station_ref = raw.get("notation") or raw.get("stationReference") or raw.get("id") or "unknown"
+                    logger.warning(
+                        "station normalization skipped for provider=%s station_ref=%s reason=%s",
+                        adapter.provider_id,
+                        station_ref,
+                        exc,
+                    )
 
             logger.info(
                 "sync_metadata provider=%s seen=%s inserted=%s updated=%s failed=%s",
