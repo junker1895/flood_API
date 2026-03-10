@@ -35,6 +35,7 @@ class USGSAdapter(BaseAdapter):
 
     def __init__(self) -> None:
         self.http_timeout_seconds = float(os.getenv("USGS_TIMEOUT_SECONDS", "20"))
+        self.http_trust_env = os.getenv("USGS_TRUST_ENV", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.site_ids = self._parse_csv(os.getenv("USGS_SITE_LIST"))
         self.state_codes = self._parse_state_codes(os.getenv("USGS_STATE_CODES"))
         self.parameter_codes = self._parse_csv(os.getenv("USGS_PARAMETER_CODES")) or ["00060", "00065"]
@@ -167,8 +168,11 @@ class USGSAdapter(BaseAdapter):
             params["endDT"] = end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         return params
 
+    def _http_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=self.http_timeout_seconds, trust_env=self.http_trust_env)
+
     async def fetch_station_catalog(self) -> list[dict]:
-        async with httpx.AsyncClient(timeout=self.http_timeout_seconds) as client:
+        async with self._http_client() as client:
             r = await client.get(USGS_SITE_URL, params=self._station_query_params())
             r.raise_for_status()
         return self._parse_usgs_rdb(r.text)
@@ -229,7 +233,7 @@ class USGSAdapter(BaseAdapter):
             return []
 
         collected: list[dict] = []
-        async with httpx.AsyncClient(timeout=self.http_timeout_seconds) as client:
+        async with self._http_client() as client:
             for chunk in self._chunk(site_ids, 100):
                 r = await client.get(USGS_IV_URL, params=self._iv_params(chunk))
                 r.raise_for_status()
@@ -249,7 +253,7 @@ class USGSAdapter(BaseAdapter):
             start, end = end, start
 
         collected: list[dict] = []
-        async with httpx.AsyncClient(timeout=self.http_timeout_seconds) as client:
+        async with self._http_client() as client:
             for chunk in self._chunk(site_ids, 50):
                 r = await client.get(USGS_IV_URL, params=self._iv_params(chunk, start=start, end=end))
                 r.raise_for_status()

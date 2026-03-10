@@ -90,6 +90,7 @@ USGS_HISTORY_END=2024-01-08T00:00:00+00:00    # optional explicit end
 
 # transport
 USGS_TIMEOUT_SECONDS=20
+USGS_TRUST_ENV=false  # set true only if your runtime must use HTTP(S)_PROXY env vars
 ```
 
 Notes/limitations:
