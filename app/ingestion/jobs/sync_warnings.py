@@ -32,8 +32,11 @@ def _ensure_provider(db: Session, provider_id: str) -> None:
         db.flush()
 
 
-async def run(db: Session) -> None:
+async def run(db: Session, provider_id: str | None = None) -> None:
     ea = EAEnglandAdapter()
+    if provider_id is not None and provider_id != ea.provider_id:
+        logger.info("sync_warnings skipping unsupported provider=%s", provider_id)
+        return
     _ensure_provider(db, ea.provider_id)
 
     with tracked_run(db, ea.provider_id, "sync_warnings") as run_state:

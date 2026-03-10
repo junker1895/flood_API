@@ -64,6 +64,34 @@ pytest
 python -m compileall app
 ```
 
+## Provider-level ingestion scheduling
+- Scheduler dispatch is provider-scoped (`provider_id + job_type`) instead of one global job per job type.
+- A provider must be enabled and the job must be both supported and enabled to be scheduled.
+- Supported job types are explicit: `metadata`, `latest`, `history`, `thresholds`, `warnings`.
+- Intervals are configured per provider per job.
+
+Environment variable pattern:
+
+```bash
+PROVIDERS__USGS__ENABLED=true
+PROVIDERS__USGS__JOBS__METADATA__INTERVAL_MINUTES=1440
+PROVIDERS__USGS__JOBS__LATEST__INTERVAL_MINUTES=15
+PROVIDERS__USGS__JOBS__HISTORY__INTERVAL_MINUTES=360
+PROVIDERS__USGS__JOBS__WARNINGS__ENABLED=false
+
+PROVIDERS__EA_ENGLAND__ENABLED=true
+PROVIDERS__EA_ENGLAND__JOBS__LATEST__INTERVAL_MINUTES=15
+PROVIDERS__EA_ENGLAND__JOBS__WARNINGS__INTERVAL_MINUTES=15
+```
+
+Optional policy hooks are available per provider/job:
+- `PROVIDERS__<PROVIDER>__JOBS__<JOB>__TIMEOUT_SECONDS`
+- `PROVIDERS__<PROVIDER>__JOBS__<JOB>__MAX_RETRIES`
+
+Backwards compatibility is preserved for existing provider toggles and latest polling env vars:
+- `ENABLE_PROVIDER_USGS`, `ENABLE_PROVIDER_EA`, `ENABLE_PROVIDER_GEOGLOWS`, `ENABLE_PROVIDER_WHOS`
+- `USGS_POLL_MINUTES`, `EA_POLL_MINUTES`, `GEOGLOWS_POLL_MINUTES`
+
 ### Testing when running in Docker (recommended for this repo)
 If you're running the stack with `docker compose`, run checks inside the `api` container so dependencies (including `pytest-asyncio`) match the app runtime.
 
