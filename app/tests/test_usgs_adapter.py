@@ -257,11 +257,30 @@ def test_fetch_latest_observations_multiple_sites(monkeypatch):
 
         async def get(self, url, params=None):
             if "site" in url:
-                return FakeResponse(text="""agency_cd	site_no	station_nm
-5s	15s	50s
-USGS	01646500	A
-USGS	01651000	B""")
-            payload = {"value": {"timeSeries": [{"sourceInfo": {"siteCode": [{"value": "01646500"}]}, "variable": {"variableCode": [{"value": "00060"}], "unit": {"unitCode": "ft3/s"}}, "values": [{"value": []}]}, {"sourceInfo": {"siteCode": [{"value": "01651000"}]}, "variable": {"variableCode": [{"value": "00065"}], "unit": {"unitCode": "ft"}}, "values": [{"value": []}]}]}}
+                text = "agency_cd\tsite_no\tstation_nm\n5s\t15s\t50s\nUSGS\t01646500\tA\nUSGS\t01651000\tB"
+                return FakeResponse(text=text)
+            payload = {
+                "value": {
+                    "timeSeries": [
+                        {
+                            "sourceInfo": {"siteCode": [{"value": "01646500"}]},
+                            "variable": {
+                                "variableCode": [{"value": "00060"}],
+                                "unit": {"unitCode": "ft3/s"},
+                            },
+                            "values": [{"value": []}],
+                        },
+                        {
+                            "sourceInfo": {"siteCode": [{"value": "01651000"}]},
+                            "variable": {
+                                "variableCode": [{"value": "00065"}],
+                                "unit": {"unitCode": "ft"},
+                            },
+                            "values": [{"value": []}],
+                        },
+                    ]
+                }
+            }
             return FakeResponse(payload=payload)
 
     monkeypatch.setattr("app.adapters.usgs.httpx.AsyncClient", FakeClient)
