@@ -42,6 +42,10 @@ class GeoglowsAdapter(BaseAdapter):
         return value.isdigit() and len(value) == 9 and value not in cls._KNOWN_PLACEHOLDER_RIVER_IDS
 
     @staticmethod
+    def _valid_river_id(value: str) -> bool:
+        return value.isdigit() and len(value) == 9
+
+    @staticmethod
     def _parse_csv(value: str | None) -> list[str]:
         if not value:
             return []
