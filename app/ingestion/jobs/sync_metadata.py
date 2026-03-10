@@ -68,9 +68,24 @@ async def run(db: Session, provider_id: str | None = None) -> None:
                     payload = st.model_dump()
                     now = utcnow()
                     station_geom = point_geom_from_latlon(payload.get("latitude"), payload.get("longitude"))
+                    raw_meta = payload.get("raw_metadata") or {}
                     db.merge(
                         Station(
                             **payload,
+                            provider_station_code=raw_meta.get("site_no") or payload.get("provider_station_id"),
+                            river_name=raw_meta.get("river_name"),
+                            country_code=raw_meta.get("country_code"),
+                            admin1=raw_meta.get("admin1"),
+                            timezone=raw_meta.get("timezone"),
+                            observed_properties=raw_meta.get("observed_properties"),
+                            canonical_primary_property=raw_meta.get("canonical_primary_property"),
+                            flow_unit_native=raw_meta.get("flow_unit_native"),
+                            stage_unit_native=raw_meta.get("stage_unit_native"),
+                            flow_unit_canonical=raw_meta.get("flow_unit_canonical"),
+                            stage_unit_canonical=raw_meta.get("stage_unit_canonical"),
+                            drainage_area_km2=raw_meta.get("drainage_area_km2"),
+                            datum_name=raw_meta.get("datum_name"),
+                            datum_vertical_reference=raw_meta.get("datum_vertical_reference"),
                             geom=station_geom,
                             first_seen_at=now,
                             last_seen_at=now,
