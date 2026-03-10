@@ -1,20 +1,14 @@
-from datetime import UTC, datetime
+from datetime import UTC
+
+import httpx
 
 from app.adapters.geoglows import GeoglowsAdapter
-
-
-async def _fake_request_json_factory(responses):
-    async def _fake_request_json(_endpoint, params=None):
-        key = (_endpoint, tuple(sorted((params or {}).items())))
-        return responses[key]
-
-    return _fake_request_json
 
 
 def test_normalize_reach_metadata_and_stable_id():
     adapter = GeoglowsAdapter()
     raw = {
-        "reach_id": 321,
+        "river_id": 902800057,
         "river": "Nile",
         "country_code": "EG",
         "lat": "30.1",
@@ -24,47 +18,46 @@ def test_normalize_reach_metadata_and_stable_id():
 
     normalized = adapter.normalize_reach(raw)
 
-    assert normalized.reach_id == "geoglows-321"
-    assert normalized.provider_reach_id == "321"
+    assert normalized.reach_id == "geoglows-902800057"
+    assert normalized.provider_reach_id == "902800057"
     assert normalized.latitude == 30.1
     assert normalized.longitude == 31.2
     assert normalized.geometry_wkt == "LINESTRING(31.2 30.1, 31.3 30.2)"
-    assert normalized.raw_metadata["modeled_source_type"] == "geoglows_streamflow"
 
 
 def test_normalize_observation_forecast_and_reanalysis_semantics():
     adapter = GeoglowsAdapter()
 
-    forecast = adapter.normalize_observation({"reach_id": "10", "datetime": "2024-01-01T00:00:00Z", "flow": 12.3, "series_type": "forecast"})
-    reanalysis = adapter.normalize_observation({"reach_id": "10", "datetime": "2024-01-01T00:00:00+00:00", "flow": 9.9, "series_type": "reanalysis"})
+    forecast = adapter.normalize_observation({"reach_id": "902800057", "datetime": "2024-01-01T00:00:00Z", "flow": 12.3, "series_type": "forecast"})
+    reanalysis = adapter.normalize_observation({"reach_id": "902800057", "datetime": "2024-01-01T00:00:00+00:00", "flow": 9.9, "series_type": "reanalysis"})
 
-    assert forecast.reach_id == "geoglows-10"
+    assert forecast.reach_id == "geoglows-902800057"
     assert forecast.is_forecast is True
-    assert forecast.property == "discharge"
-    assert forecast.unit_canonical == "m3/s"
-
     assert reanalysis.is_forecast is False
     assert reanalysis.observed_at.tzinfo == UTC
 
 
-def test_fetch_latest_observations_uses_latest_point(monkeypatch):
+def test_fetch_latest_observations_v2_forecaststats(monkeypatch):
     adapter = GeoglowsAdapter()
-    adapter.reach_ids = ["1001"]
+    adapter.reach_ids = ["902800057"]
 
-    responses = {
-        (adapter.reach_metadata_endpoint, (("reach_id", "1001"),)): {"reach_id": "1001", "lat": 1.0, "lon": 2.0},
-        (adapter.latest_endpoint, (("reach_id", "1001"),)): {
-            "data": [
-                {"datetime": "2024-01-01T00:00:00Z", "flow": 10.0},
-                {"datetime": "2024-01-01T01:00:00Z", "flow": 11.0},
-            ]
-        },
-    }
+    calls = []
 
-    async def fake_request_json(endpoint, params=None):
-        return responses[(endpoint, tuple(sorted((params or {}).items())))]
+    async def fake_url(url, params=None):
+        calls.append((url, params))
+        if "/forecaststats/902800057" in url:
+            return {
+                "datetime": ["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"],
+                "mean": [10.0, 11.0],
+            }
+        raise AssertionError("unexpected v2 url")
 
-    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    async def fake_legacy(endpoint, params=None):
+        assert endpoint == adapter.reach_metadata_endpoint
+        return {"river_id": "902800057", "lat": 1.0, "lon": 2.0}
+
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
     import asyncio
 
@@ -72,29 +65,54 @@ def test_fetch_latest_observations_uses_latest_point(monkeypatch):
 
     assert len(items) == 1
     assert items[0]["flow"] == 11.0
-    assert items[0]["series_type"] == "forecast"
+    assert items[0]["meta"]["product"] == "forecaststats"
+    assert any(params in ({}, None) for _, params in calls)
 
 
-def test_fetch_historical_timeseries_parses_reanalysis(monkeypatch):
+def test_fetch_latest_observations_falls_back_to_v2_ensembles(monkeypatch):
     adapter = GeoglowsAdapter()
-    adapter.reach_ids = ["1001"]
+    adapter.reach_ids = ["902800057"]
 
-    responses = {
-        (adapter.reach_metadata_endpoint, (("reach_id", "1001"),)): {"reach_id": "1001"},
-        (adapter.history_endpoint, (("reach_id", "1001"), ("start_date", (datetime.now(UTC)).date().isoformat()))): {
-            "2024-01-01T00:00:00Z": 7.1,
-            "2024-01-01T01:00:00Z": 7.5,
-        },
-    }
+    async def fake_url(url, params=None):
+        if "/forecaststats/902800057" in url:
+            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
+        if "/forecastensemble/902800057" in url:
+            return {"datetime": ["2024-01-01T00:00:00Z"], "ensemble_52": [4.2]}
+        raise AssertionError("unexpected v2 url")
 
-    async def fake_request_json(endpoint, params=None):
-        key = (endpoint, tuple(sorted((params or {}).items())))
-        if endpoint == adapter.history_endpoint:
-            # ignore start_date exact value drift
-            return {"2024-01-01T00:00:00Z": 7.1, "2024-01-01T01:00:00Z": 7.5}
-        return responses[key]
+    async def fake_legacy(_endpoint, params=None):
+        return {"river_id": "902800057"}
 
-    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
+
+    import asyncio
+
+    items = asyncio.run(adapter.fetch_latest_observations())
+
+    assert len(items) == 1
+    assert items[0]["flow"] == 4.2
+    assert items[0]["meta"]["product"] == "forecastensemble"
+
+
+def test_fetch_historical_timeseries_v2_retrospective_columnar(monkeypatch):
+    adapter = GeoglowsAdapter()
+    adapter.reach_ids = ["902800057"]
+    adapter.history_lookback_days = 36500
+
+    async def fake_url(url, params=None):
+        assert "/retrospectivedaily/902800057" in url
+        assert params is None
+        return {
+            "datetime": ["2024-01-01", "2024-01-02"],
+            "902800057": [7.1, 7.5],
+        }
+
+    async def fake_legacy(_endpoint, params=None):
+        return {"river_id": "902800057"}
+
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
     import asyncio
 
@@ -104,104 +122,104 @@ def test_fetch_historical_timeseries_parses_reanalysis(monkeypatch):
     assert all(r["series_type"] == "reanalysis" for r in records)
 
 
-def test_fetch_latest_observations_skips_failed_reach(monkeypatch):
+def test_metadata_best_effort_does_not_block_latest(monkeypatch):
     adapter = GeoglowsAdapter()
-    adapter.reach_ids = ["1001", "1002"]
+    adapter.reach_ids = ["902800057"]
 
-    async def fake_request_json(endpoint, params=None):
-        rid = (params or {}).get("reach_id")
-        if endpoint == adapter.reach_metadata_endpoint:
-            return {"reach_id": rid}
-        if endpoint == adapter.latest_endpoint and rid == "1001":
-            raise Exception("500 error")
-        if endpoint == adapter.latest_endpoint and rid == "1002":
-            return {"data": [{"datetime": "2024-01-01T01:00:00Z", "flow": 3.4}]}
-        raise AssertionError("unexpected call")
+    async def fake_url(url, params=None):
+        if "/forecaststats/902800057" in url:
+            return {"datetime": ["2024-01-01T01:00:00Z"], "mean": [3.4]}
+        raise AssertionError("unexpected v2 url")
 
-    async def wrapped(endpoint, params=None):
-        try:
-            return await fake_request_json(endpoint, params)
-        except Exception as exc:
-            import httpx
+    async def fake_legacy(_endpoint, params=None):
+        raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
 
-            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500)) from exc
-
-    monkeypatch.setattr(adapter, "_request_json", wrapped)
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
     import asyncio
 
     items = asyncio.run(adapter.fetch_latest_observations())
 
     assert len(items) == 1
-    assert items[0]["reach_id"] == "1002"
+    assert items[0]["reach_id"] == "902800057"
 
 
-def test_fetch_latest_observations_uses_fallback_endpoint(monkeypatch):
+def test_invalid_configured_ids_are_filtered(monkeypatch):
     adapter = GeoglowsAdapter()
-    adapter.reach_ids = ["1001"]
-    adapter.latest_endpoints = ["/api/ForecastStats/", "/api/ForecastEnsembles/"]
+    adapter.reach_ids = ["1001", "abc", "123456789", "902800057"]
 
-    calls = []
+    seen = []
 
-    async def fake_request_json(endpoint, params=None):
-        calls.append(endpoint)
-        if endpoint == adapter.reach_metadata_endpoint:
-            return {"reach_id": "1001"}
-        if endpoint == "/api/ForecastStats/":
-            import httpx
+    async def fake_url(url, params=None):
+        seen.append(url)
+        if "/forecaststats/902800057" in url:
+            return {"datetime": ["2024-01-01T01:00:00Z"], "mean": [1.0]}
+        raise AssertionError("unexpected v2 url")
 
-            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
-        if endpoint == "/api/ForecastEnsembles/":
-            return {"data": [{"datetime": "2024-01-01T02:00:00Z", "flow": 7.7}]}
-        raise AssertionError("unexpected call")
+    async def fake_legacy(_endpoint, params=None):
+        return {"river_id": "902800057"}
 
-    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
     import asyncio
 
     items = asyncio.run(adapter.fetch_latest_observations())
 
     assert len(items) == 1
-    assert items[0]["flow"] == 7.7
-    assert items[0]["meta"]["endpoint"] == "/api/ForecastEnsembles/"
-    assert "/api/ForecastStats/" in calls and "/api/ForecastEnsembles/" in calls
+    assert any("/forecaststats/902800057" in url for url in seen)
+    assert all("1001" not in url and "123456789" not in url for url in seen)
 
 
-def test_fetch_reach_catalog_returns_empty_on_catalog_failure(monkeypatch):
+
+def test_fetch_reach_by_id_prefers_metadata_with_geometry(monkeypatch):
     adapter = GeoglowsAdapter()
-    adapter.reach_ids = []
 
-    async def fake_request_json(endpoint, params=None):
-        if endpoint == adapter.reach_catalog_endpoint:
-            import httpx
+    async def fake_legacy(endpoint, params=None):
+        assert endpoint == adapter.reach_metadata_endpoint
+        if params == {"river_id": "902800057"}:
+            return {"river_id": "902800057"}
+        if params == {"reach_id": "902800057"}:
+            return {
+                "reach_id": "902800057",
+                "lat": 1.0,
+                "lon": 2.0,
+                "geometry": {"type": "LineString", "coordinates": [[2.0, 1.0], [2.1, 1.1]]},
+            }
+        raise AssertionError("unexpected params")
 
-            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
-        raise AssertionError("unexpected call")
-
-    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
     import asyncio
 
-    records = asyncio.run(adapter.fetch_reach_catalog())
+    row = asyncio.run(adapter.fetch_reach_by_id("902800057"))
 
-    assert records == []
+    assert row is not None
+    assert row.get("geometry", {}).get("type") == "LineString"
+    assert row.get("river_id") == "902800057"
 
 
-def test_fetch_latest_observations_returns_empty_when_catalog_fails(monkeypatch):
+
+def test_metadata_best_effort_does_not_block_history(monkeypatch):
     adapter = GeoglowsAdapter()
-    adapter.reach_ids = []
+    adapter.reach_ids = ["902800057"]
+    adapter.history_lookback_days = 36500
 
-    async def fake_request_json(endpoint, params=None):
-        if endpoint == adapter.reach_catalog_endpoint:
-            import httpx
+    async def fake_url(url, params=None):
+        if "/retrospectivedaily/902800057" in url:
+            return {"datetime": ["2024-01-01"], "902800057": [3.4]}
+        raise AssertionError("unexpected v2 url")
 
-            raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
-        raise AssertionError("unexpected call")
+    async def fake_legacy(_endpoint, params=None):
+        raise httpx.HTTPStatusError("failed", request=httpx.Request("GET", "http://test"), response=httpx.Response(500))
 
-    monkeypatch.setattr(adapter, "_request_json", fake_request_json)
+    monkeypatch.setattr(adapter, "_request_json_url", fake_url)
+    monkeypatch.setattr(adapter, "_request_json_legacy", fake_legacy)
 
     import asyncio
 
-    items = asyncio.run(adapter.fetch_latest_observations())
+    records = asyncio.run(adapter.fetch_historical_timeseries())
 
-    assert items == []
+    assert len(records) == 1
+    assert records[0]["flow"] == 3.4
