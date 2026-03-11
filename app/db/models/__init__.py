@@ -1,3 +1,4 @@
+from app.db.models.forecast import ForecastReach, ForecastReachDetail, ForecastReachRisk, ForecastRun
 from app.db.models.ingestion_run import IngestionRun
 from app.db.models.observation_latest import ObservationLatest
 from app.db.models.observation_timeseries import ObservationTimeseries
@@ -18,4 +19,8 @@ __all__ = [
     "WarningEvent",
     "IngestionRun",
     "RawIngestArchive",
+    "ForecastReach",
+    "ForecastRun",
+    "ForecastReachRisk",
+    "ForecastReachDetail",
 ]
