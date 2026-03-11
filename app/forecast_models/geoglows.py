@@ -132,15 +132,27 @@ class GeoglowsForecastProvider(ForecastModelProvider):
             raise ValueError(f"GEOGLOWS return-period coordinate missing expected values: {missing}")
 
         values = ds[rp_curve_var].values
+        rp_values = ds[rp_dim].values
+
+        def _value_at(reach_idx: int, rp_idx: int) -> float:
+            # Some GEOGLOWS return-period datasets are stored as
+            # [river_id, return_period] while others are [return_period, river_id].
+            if len(values) == len(reach_values):
+                return float(values[reach_idx][rp_idx])
+            if len(values) == len(rp_values):
+                return float(values[rp_idx][reach_idx])
+            raise ValueError(
+                "GEOGLOWS return-period curve shape does not match reach/return_period coordinates"
+            )
+
         for idx, rv in enumerate(reach_values):
             rid = int(rv)
-            row_values = values[idx]
-            output[rid]["rp2"] = float(row_values[rp_index_map[2]])
-            output[rid]["rp5"] = float(row_values[rp_index_map[5]])
-            output[rid]["rp10"] = float(row_values[rp_index_map[10]])
-            output[rid]["rp25"] = float(row_values[rp_index_map[25]])
-            output[rid]["rp50"] = float(row_values[rp_index_map[50]])
-            output[rid]["rp100"] = float(row_values[rp_index_map[100]])
+            output[rid]["rp2"] = _value_at(idx, rp_index_map[2])
+            output[rid]["rp5"] = _value_at(idx, rp_index_map[5])
+            output[rid]["rp10"] = _value_at(idx, rp_index_map[10])
+            output[rid]["rp25"] = _value_at(idx, rp_index_map[25])
+            output[rid]["rp50"] = _value_at(idx, rp_index_map[50])
+            output[rid]["rp100"] = _value_at(idx, rp_index_map[100])
         return output
 
     def iter_reach_metadata_chunks(self, chunk_size: int = 5000) -> Iterable[list[dict[str, Any]]]:
