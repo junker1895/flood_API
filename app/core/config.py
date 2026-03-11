@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     geoglows_history_lookback_days: int = 7
     geoglows_timeout_seconds: float = 30.0
 
+    forecast_default_model: str = "geoglows"
+    forecast_major_river_threshold: float = 5000.0
+    forecast_detail_river_threshold: float = 10000.0
+    forecast_priority_region_ids: str = ""
+    forecast_detail_region_ids: str = ""
+
+    geoglows_forecast_reach_metadata_url: str | None = None
+    geoglows_forecast_run_manifest_url: str | None = None
+    geoglows_forecast_run_data_url_template: str | None = None
+
     station_fresh_minutes: int = 30
     station_stale_minutes: int = 360
     reach_fresh_minutes: int = 720
