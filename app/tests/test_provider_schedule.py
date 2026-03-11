@@ -26,6 +26,7 @@ def test_unsupported_jobs_not_dispatched():
 
     assert schedule.jobs[JobType.WARNINGS].enabled is False
     assert schedule.jobs[JobType.THRESHOLDS].enabled is False
+    assert schedule.jobs[JobType.HISTORY].enabled is True
 
 
 def test_interval_parsing_and_legacy_fallback(monkeypatch):

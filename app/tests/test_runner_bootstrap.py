@@ -37,7 +37,7 @@ def test_runner_bootstrap_executes_metadata_before_latest(monkeypatch):
         JobType.METADATA,
     ]
     assert fake_scheduler.started is True
-    assert len(fake_scheduler.jobs) == 8
+    assert len(fake_scheduler.jobs) == 9
 
 
 def test_wait_for_db_readiness_success(monkeypatch):
