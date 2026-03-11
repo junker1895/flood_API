@@ -29,6 +29,19 @@ class Settings(BaseSettings):
     geoglows_history_lookback_days: int = 7
     geoglows_timeout_seconds: float = 30.0
 
+    forecast_default_model: str = "geoglows"
+    forecast_major_river_threshold: float = 5000.0
+    forecast_detail_river_threshold: float = 10000.0
+    forecast_priority_region_ids: str = ""
+    forecast_detail_region_ids: str = ""
+
+    geoglows_forecast_bucket: str = "geoglows-v2-forecasts"
+    geoglows_forecast_prefix: str = ""
+    geoglows_metadata_bucket: str = "geoglows-v2"
+    geoglows_metadata_tables_prefix: str = "tables"
+    geoglows_return_periods_zarr_path: str = "s3://geoglows-v2/retrospective/return-periods.zarr"
+    geoglows_aws_region: str = "us-west-2"
+
     station_fresh_minutes: int = 30
     station_stale_minutes: int = 360
     reach_fresh_minutes: int = 720
