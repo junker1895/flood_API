@@ -120,3 +120,35 @@ def test_iter_run_forecast_chunks_fails_when_required_variable_missing(monkeypat
     run = type("Run", (), {"source_path": "s3://geoglows-v2-forecasts/archive/2026-03-11/forecast.zarr"})()
     with pytest.raises(ValueError, match="median flow variable"):
         list(provider.iter_run_forecast_chunks(run, chunk_size=1))
+
+
+def test_read_return_periods_from_curve_dataset(monkeypatch):
+    provider = GeoglowsForecastProvider()
+
+    class _Arr:
+        def __init__(self, values):
+            self.values = values
+
+    class _Ds:
+        coords = {"river_id": None, "return_period": None}
+        variables = {"river_id": None, "return_period": None, "logpearson3": None}
+        data_vars = {"logpearson3": None}
+
+        def __getitem__(self, key):
+            if key == "river_id":
+                return _Arr([101, 102])
+            if key == "return_period":
+                return _Arr([2, 5, 10, 25, 50, 100])
+            if key == "logpearson3":
+                return _Arr([
+                    [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                    [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+                ])
+            raise KeyError(key)
+
+    import types, sys
+    fake_xr = types.SimpleNamespace(open_zarr=lambda *args, **kwargs: _Ds())
+    monkeypatch.setitem(sys.modules, "xarray", fake_xr)
+    out = provider._read_return_periods()
+    assert out[101]["rp10"] == 3.0
+    assert out[102]["rp100"] == 60.0

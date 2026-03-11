@@ -46,6 +46,21 @@ class GeoglowsForecastProvider(ForecastModelProvider):
                 return lowered[alias.lower()]
         return None
 
+
+    @staticmethod
+    def _normalize_return_period(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            iv = int(round(float(value)))
+            return iv if iv in {2, 5, 10, 25, 50, 100} else None
+        raw = str(value).strip().lower()
+        digits = ''.join(ch for ch in raw if ch.isdigit())
+        if not digits:
+            return None
+        iv = int(digits)
+        return iv if iv in {2, 5, 10, 25, 50, 100} else None
+
     def _read_table(self, uri: str):
         import pandas as pd
 
@@ -87,16 +102,45 @@ class GeoglowsForecastProvider(ForecastModelProvider):
             "rp100": self._find_column(list(ds.variables), ["rp100", "return_period_100"]),
         }
 
-        if not any(rp_vars.values()):
+        reach_values = ds[reach_dim].values
+        output: dict[int, dict[str, float | None]] = {
+            int(rv): {"rp2": None, "rp5": None, "rp10": None, "rp25": None, "rp50": None, "rp100": None}
+            for rv in reach_values
+        }
+
+        if any(rp_vars.values()):
+            for idx, rv in enumerate(reach_values):
+                rid = int(rv)
+                for key, var_name in rp_vars.items():
+                    output[rid][key] = float(ds[var_name].values[idx]) if var_name else None
+            return output
+
+        rp_dim = self._find_column(list(ds.coords) + list(ds.variables), ["return_period", "rp", "rp_dim"])
+        rp_curve_var = self._find_column(list(ds.data_vars), ["logpearson3", "gumbel", "return_period_flow"])
+        if not rp_dim or not rp_curve_var:
             raise ValueError("GEOGLOWS return-period dataset missing RP variables")
 
-        reach_values = ds[reach_dim].values
-        output: dict[int, dict[str, float | None]] = {}
+        rp_index_map: dict[int, int] = {}
+        for idx, rp_raw in enumerate(ds[rp_dim].values):
+            parsed = self._normalize_return_period(rp_raw)
+            if parsed is not None:
+                rp_index_map[parsed] = idx
+
+        required = {2, 5, 10, 25, 50, 100}
+        missing = sorted(required - set(rp_index_map))
+        if missing:
+            raise ValueError(f"GEOGLOWS return-period coordinate missing expected values: {missing}")
+
+        values = ds[rp_curve_var].values
         for idx, rv in enumerate(reach_values):
             rid = int(rv)
-            output[rid] = {}
-            for key, var_name in rp_vars.items():
-                output[rid][key] = float(ds[var_name].values[idx]) if var_name else None
+            row_values = values[idx]
+            output[rid]["rp2"] = float(row_values[rp_index_map[2]])
+            output[rid]["rp5"] = float(row_values[rp_index_map[5]])
+            output[rid]["rp10"] = float(row_values[rp_index_map[10]])
+            output[rid]["rp25"] = float(row_values[rp_index_map[25]])
+            output[rid]["rp50"] = float(row_values[rp_index_map[50]])
+            output[rid]["rp100"] = float(row_values[rp_index_map[100]])
         return output
 
     def iter_reach_metadata_chunks(self, chunk_size: int = 5000) -> Iterable[list[dict[str, Any]]]:
