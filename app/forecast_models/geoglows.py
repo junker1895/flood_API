@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-import json
 import logging
-from pathlib import Path
+import re
 from typing import Any, Iterable
-
-import httpx
 
 from app.core.config import settings
 from app.forecast_models.base import ForecastModelProvider, ForecastRunDescriptor
@@ -18,29 +15,20 @@ class GeoglowsForecastProvider(ForecastModelProvider):
     model_name = "geoglows"
 
     def __init__(self) -> None:
-        self.metadata_url = settings.geoglows_forecast_reach_metadata_url
-        self.run_manifest_url = settings.geoglows_forecast_run_manifest_url
-        self.run_data_url_template = settings.geoglows_forecast_run_data_url_template
-        self.timeout_seconds = settings.geoglows_timeout_seconds
+        self.forecast_bucket = settings.geoglows_forecast_bucket
+        self.forecast_prefix = settings.geoglows_forecast_prefix.strip("/")
+        self.metadata_bucket = settings.geoglows_metadata_bucket
+        self.metadata_tables_prefix = settings.geoglows_metadata_tables_prefix.strip("/")
+        self.return_periods_zarr_path = settings.geoglows_return_periods_zarr_path
+        self.aws_region = settings.geoglows_aws_region
 
-    def _load_json(self, source: str) -> Any:
-        if source.startswith("http://") or source.startswith("https://"):
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.get(source)
-                response.raise_for_status()
-                return response.json()
-        return json.loads(Path(source).read_text())
+    def _storage_options(self) -> dict[str, Any]:
+        return {"anon": True, "client_kwargs": {"region_name": self.aws_region}}
 
-    @staticmethod
-    def _unwrap_rows(payload: Any) -> list[dict[str, Any]]:
-        if isinstance(payload, list):
-            rows = payload
-        elif isinstance(payload, dict):
-            data = payload.get("data")
-            rows = data if isinstance(data, list) else []
-        else:
-            rows = []
-        return [row for row in rows if isinstance(row, dict)]
+    def _s3_filesystem(self):
+        import fsspec
+
+        return fsspec.filesystem("s3", **self._storage_options())
 
     @staticmethod
     def _extract_reach_id(row: dict[str, Any]) -> int | None:
@@ -50,89 +38,224 @@ class GeoglowsForecastProvider(ForecastModelProvider):
         except (TypeError, ValueError):
             return None
 
-    def _validate_metadata_schema(self, row: dict[str, Any]) -> None:
-        if self._extract_reach_id(row) is None:
-            raise ValueError("GEOGLOWS metadata missing reach identifier; expected LINKNO/comid/reach_id/river_id")
+    @staticmethod
+    def _find_column(columns: list[str], aliases: list[str]) -> str | None:
+        lowered = {c.lower(): c for c in columns}
+        for alias in aliases:
+            if alias.lower() in lowered:
+                return lowered[alias.lower()]
+        return None
 
-    def _validate_run_schema(self, row: dict[str, Any]) -> None:
-        if self._extract_reach_id(row) is None:
-            raise ValueError("GEOGLOWS run row missing reach identifier")
-        timesteps = row.get("timesteps")
-        if not isinstance(timesteps, list):
-            raise ValueError("GEOGLOWS run row missing timesteps[] payload")
+    def _read_table(self, uri: str):
+        import pandas as pd
+
+        if uri.endswith(".parquet"):
+            return pd.read_parquet(uri, storage_options=self._storage_options())
+        if uri.endswith(".csv"):
+            return pd.read_csv(uri, storage_options=self._storage_options())
+        raise ValueError(f"unsupported table format for {uri}")
+
+    def _discover_metadata_table_uris(self) -> list[str]:
+        fs = self._s3_filesystem()
+        prefix = f"{self.metadata_bucket}/{self.metadata_tables_prefix}".rstrip("/")
+        candidates = fs.find(prefix)
+        uris = []
+        for key in candidates:
+            lowered = key.lower()
+            if not (lowered.endswith(".parquet") or lowered.endswith(".csv")):
+                continue
+            if any(token in lowered for token in ["reach", "river", "network", "comid", "table"]):
+                uris.append(f"s3://{key}")
+        if not uris:
+            raise ValueError(f"No usable GEOGLOWS metadata tables discovered under s3://{prefix}")
+        return uris
+
+    def _read_return_periods(self) -> dict[int, dict[str, float | None]]:
+        import xarray as xr
+
+        ds = xr.open_zarr(self.return_periods_zarr_path, storage_options=self._storage_options())
+        reach_dim = self._find_column(list(ds.coords) + list(ds.variables), ["reach_id", "river_id", "comid", "link_no", "LINKNO"])
+        if not reach_dim:
+            raise ValueError("GEOGLOWS return-period dataset missing reach identifier coordinate")
+
+        rp_vars = {
+            "rp2": self._find_column(list(ds.variables), ["rp2", "return_period_2"]),
+            "rp5": self._find_column(list(ds.variables), ["rp5", "return_period_5"]),
+            "rp10": self._find_column(list(ds.variables), ["rp10", "return_period_10"]),
+            "rp25": self._find_column(list(ds.variables), ["rp25", "return_period_25"]),
+            "rp50": self._find_column(list(ds.variables), ["rp50", "return_period_50"]),
+            "rp100": self._find_column(list(ds.variables), ["rp100", "return_period_100"]),
+        }
+
+        if not any(rp_vars.values()):
+            raise ValueError("GEOGLOWS return-period dataset missing RP variables")
+
+        reach_values = ds[reach_dim].values
+        output: dict[int, dict[str, float | None]] = {}
+        for idx, rv in enumerate(reach_values):
+            rid = int(rv)
+            output[rid] = {}
+            for key, var_name in rp_vars.items():
+                output[rid][key] = float(ds[var_name].values[idx]) if var_name else None
+        return output
 
     def iter_reach_metadata_chunks(self, chunk_size: int = 5000) -> Iterable[list[dict[str, Any]]]:
-        if not self.metadata_url:
-            raise ValueError("GEOGLOWS_FORECAST_REACH_METADATA_URL is required")
+        table_uris = self._discover_metadata_table_uris()
+        rp_map = self._read_return_periods()
 
-        payload = self._load_json(self.metadata_url)
-        rows = self._unwrap_rows(payload)
-        if not rows:
-            raise ValueError("GEOGLOWS metadata payload has no rows")
-        self._validate_metadata_schema(rows[0])
+        assembled: list[dict[str, Any]] = []
+        for uri in table_uris:
+            table = self._read_table(uri)
+            id_col = self._find_column(list(table.columns), ["reach_id", "river_id", "comid", "link_no", "LINKNO"])
+            if not id_col:
+                continue
+            lon_col = self._find_column(list(table.columns), ["lon", "longitude", "x"])
+            lat_col = self._find_column(list(table.columns), ["lat", "latitude", "y"])
+            uparea_col = self._find_column(list(table.columns), ["uparea", "upstream_area", "drainage_area"])
 
-        logger.info("geoglows reach metadata identifier: GEOGLOWS v2 river network uses 9-digit LINKNO/COMID identifiers")
-        for idx in range(0, len(rows), chunk_size):
-            chunk = []
-            for raw in rows[idx : idx + chunk_size]:
-                reach_id = self._extract_reach_id(raw)
-                if reach_id is None:
+            for row in table.to_dict(orient="records"):
+                rid = self._extract_reach_id(row)
+                if rid is None:
                     continue
-                chunk.append(
+                rp = rp_map.get(rid, {})
+                assembled.append(
                     {
                         "model": self.model_name,
-                        "reach_id": reach_id,
-                        "lon": raw.get("lon") or raw.get("longitude") or raw.get("x"),
-                        "lat": raw.get("lat") or raw.get("latitude") or raw.get("y"),
-                        "uparea": raw.get("uparea") or raw.get("upstream_area") or raw.get("drainage_area"),
-                        "rp2": raw.get("rp2"),
-                        "rp5": raw.get("rp5"),
-                        "rp10": raw.get("rp10"),
-                        "rp25": raw.get("rp25"),
-                        "rp50": raw.get("rp50"),
-                        "rp100": raw.get("rp100"),
-                        "source_metadata": raw,
+                        "reach_id": rid,
+                        "lon": row.get(lon_col) if lon_col else None,
+                        "lat": row.get(lat_col) if lat_col else None,
+                        "uparea": row.get(uparea_col) if uparea_col else None,
+                        "rp2": rp.get("rp2"),
+                        "rp5": rp.get("rp5"),
+                        "rp10": rp.get("rp10"),
+                        "rp25": rp.get("rp25"),
+                        "rp50": rp.get("rp50"),
+                        "rp100": rp.get("rp100"),
+                        "source_metadata": {"table_uri": uri},
                     }
                 )
-            yield chunk
+            if assembled:
+                break
+
+        if not assembled:
+            raise ValueError("Unable to discover usable GEOGLOWS reach metadata rows from AWS Open Data tables")
+
+        logger.info("geoglows reach metadata identifier: GEOGLOWS v2 river network uses 9-digit LINKNO/COMID identifiers")
+        for idx in range(0, len(assembled), chunk_size):
+            yield assembled[idx : idx + chunk_size]
+
+    @staticmethod
+    def _extract_date_from_key(key: str) -> date | None:
+        for pattern in [r"(\d{4}-\d{2}-\d{2})", r"(\d{8})"]:
+            m = re.search(pattern, key)
+            if not m:
+                continue
+            raw = m.group(1)
+            try:
+                return date.fromisoformat(raw) if "-" in raw else datetime.strptime(raw, "%Y%m%d").date()
+            except ValueError:
+                continue
+        return None
+
+    def _discover_forecast_zarr_paths(self) -> list[str]:
+        fs = self._s3_filesystem()
+        base = f"{self.forecast_bucket}/{self.forecast_prefix}".rstrip("/")
+        keys = fs.find(base)
+        zarr_dirs = sorted({k.split(".zarr/")[0] + ".zarr" for k in keys if ".zarr/" in k or k.endswith(".zarr")})
+        if not zarr_dirs:
+            raise ValueError(f"No GEOGLOWS forecast Zarr datasets discovered under s3://{base}")
+        return [f"s3://{key}" for key in zarr_dirs]
+
+    def _open_forecast_dataset(self, source_path: str):
+        import xarray as xr
+
+        return xr.open_zarr(source_path, storage_options=self._storage_options())
+
+    def _discover_time_values(self, ds) -> list[str]:
+        time_var = self._find_column(list(ds.coords) + list(ds.variables), ["time", "valid_time", "datetime"])
+        if not time_var:
+            raise ValueError("GEOGLOWS forecast dataset missing time coordinate")
+        return [str(v) for v in ds[time_var].values]
+
+    def _discover_reach_coord(self, ds) -> str:
+        reach_var = self._find_column(list(ds.coords) + list(ds.variables), ["reach_id", "river_id", "comid", "link_no", "LINKNO"])
+        if not reach_var:
+            raise ValueError("GEOGLOWS forecast dataset missing reach coordinate")
+        return reach_var
 
     def discover_run(self, forecast_date: date | None = None) -> ForecastRunDescriptor:
-        if not self.run_manifest_url:
-            raise ValueError("GEOGLOWS_FORECAST_RUN_MANIFEST_URL is required")
-        payload = self._load_json(self.run_manifest_url)
-        raw = payload["data"] if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
-        if not isinstance(raw, dict):
-            raise ValueError("GEOGLOWS run manifest payload must be an object")
+        paths = self._discover_forecast_zarr_paths()
+        dated_paths = [(self._extract_date_from_key(path), path) for path in paths]
+        dated_paths = [(d, p) for d, p in dated_paths if d is not None]
+        if not dated_paths:
+            raise ValueError("Unable to derive forecast dates from GEOGLOWS forecast bucket keys")
 
-        date_value = raw.get("forecast_date")
         if forecast_date is None:
-            if not date_value:
-                raise ValueError("run manifest missing forecast_date")
-            forecast_date = date.fromisoformat(str(date_value))
+            picked_date, source_path = max(dated_paths, key=lambda item: item[0])
+        else:
+            matching = [p for d, p in dated_paths if d == forecast_date]
+            if not matching:
+                raise ValueError(f"No GEOGLOWS forecast dataset found for forecast_date={forecast_date}")
+            picked_date, source_path = forecast_date, matching[0]
 
-        timesteps = raw.get("timesteps") or []
-        timestep_count = raw.get("timestep_count") or (len(timesteps) if isinstance(timesteps, list) else None)
-        issued_at = raw.get("run_issued_at")
-        issued = datetime.fromisoformat(str(issued_at).replace("Z", "+00:00")).astimezone(UTC) if issued_at else None
+        ds = self._open_forecast_dataset(source_path)
+        timesteps = self._discover_time_values(ds)
+        issued_at = None
+        issued_raw = ds.attrs.get("run_issued_at") or ds.attrs.get("forecast_issued_at") or ds.attrs.get("production_time")
+        if issued_raw:
+            issued_at = datetime.fromisoformat(str(issued_raw).replace("Z", "+00:00")).astimezone(UTC)
+
+        timestep_hours = None
+        if len(timesteps) >= 2:
+            t0 = datetime.fromisoformat(timesteps[0].replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(timesteps[1].replace("Z", "+00:00"))
+            timestep_hours = int((t1 - t0).total_seconds() // 3600)
 
         return ForecastRunDescriptor(
-            forecast_date=forecast_date,
-            run_issued_at=issued,
-            timestep_count=timestep_count,
-            timestep_hours=raw.get("timestep_hours"),
-            timesteps=[str(t) for t in timesteps] if isinstance(timesteps, list) else [],
-            source_path=self.run_data_url_template,
-            source_metadata={"manifest_url": self.run_manifest_url},
+            forecast_date=picked_date,
+            run_issued_at=issued_at,
+            timestep_count=len(timesteps),
+            timestep_hours=timestep_hours,
+            timesteps=timesteps,
+            source_path=source_path,
+            source_metadata={"dataset_attrs": {k: str(v) for k, v in ds.attrs.items()}},
         )
 
     def iter_run_forecast_chunks(self, run: ForecastRunDescriptor, chunk_size: int = 2500) -> Iterable[list[dict[str, Any]]]:
-        if not self.run_data_url_template:
-            raise ValueError("GEOGLOWS_FORECAST_RUN_DATA_URL_TEMPLATE is required")
-        source = self.run_data_url_template.format(forecast_date=run.forecast_date.isoformat())
-        rows = self._unwrap_rows(self._load_json(source))
-        if not rows:
-            raise ValueError("GEOGLOWS forecast run payload has no rows")
-        self._validate_run_schema(rows[0])
+        ds = self._open_forecast_dataset(run.source_path or "")
+        reach_coord = self._discover_reach_coord(ds)
+        time_coord = self._find_column(list(ds.coords) + list(ds.variables), ["time", "valid_time", "datetime"])
+        if not time_coord:
+            raise ValueError("GEOGLOWS forecast dataset missing time coordinate")
 
-        for idx in range(0, len(rows), chunk_size):
-            yield rows[idx : idx + chunk_size]
+        median_flow_var = self._find_column(list(ds.variables), ["flow_median", "median", "q50", "ensemble_median", "streamflow_median"])
+        if not median_flow_var:
+            raise ValueError("GEOGLOWS forecast dataset missing median flow variable")
+
+        rp2_prob_var = self._find_column(list(ds.variables), ["prob_exceed_rp2", "probability_rp2"])
+        rp5_prob_var = self._find_column(list(ds.variables), ["prob_exceed_rp5", "probability_rp5"])
+        rp10_prob_var = self._find_column(list(ds.variables), ["prob_exceed_rp10", "probability_rp10"])
+        ensemble_var = self._find_column(list(ds.variables), ["ensemble", "ensemble_flow", "streamflow_ensemble"])
+
+        reach_values = ds[reach_coord].values
+        time_values = ds[time_coord].values
+
+        for start in range(0, len(reach_values), chunk_size):
+            end = min(start + chunk_size, len(reach_values))
+            sub = ds.isel({reach_coord: slice(start, end)})
+            chunk_rows: list[dict[str, Any]] = []
+            for ridx, rid in enumerate(reach_values[start:end]):
+                timesteps = []
+                for tidx, tval in enumerate(time_values):
+                    ts = {
+                        "valid_time": str(tval),
+                        "flow_median": float(sub[median_flow_var].values[ridx, tidx]),
+                        "prob_exceed_rp2": float(sub[rp2_prob_var].values[ridx, tidx]) if rp2_prob_var else None,
+                        "prob_exceed_rp5": float(sub[rp5_prob_var].values[ridx, tidx]) if rp5_prob_var else None,
+                        "prob_exceed_rp10": float(sub[rp10_prob_var].values[ridx, tidx]) if rp10_prob_var else None,
+                    }
+                    if ensemble_var:
+                        ts["ensemble_members"] = [float(v) for v in sub[ensemble_var].values[ridx, :, tidx]]
+                    timesteps.append(ts)
+                chunk_rows.append({"reach_id": int(rid), "timesteps": timesteps})
+            yield chunk_rows

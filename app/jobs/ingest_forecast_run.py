@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
 import logging
 
 from sqlalchemy import select
@@ -65,19 +65,23 @@ def run(model: str, forecast_date: date | None) -> None:
         for chunk_idx, chunk in enumerate(provider.iter_run_forecast_chunks(run_descriptor), start=1):
             reach_ids = [int(row.get("reach_id") or row.get("river_id") or row.get("link_no") or row.get("LINKNO") or row.get("comid")) for row in chunk]
             meta_rows = db.execute(
-                select(ForecastReach.reach_id, ForecastReach.uparea, ForecastReach.source_metadata).where(
+                select(ForecastReach.reach_id, ForecastReach.uparea, ForecastReach.rp2, ForecastReach.rp5, ForecastReach.rp10, ForecastReach.source_metadata).where(
                     ForecastReach.model == model, ForecastReach.reach_id.in_(reach_ids)
                 )
             ).all()
-            meta_map = {int(r.reach_id): {"uparea": r.uparea, "source_metadata": r.source_metadata or {}} for r in meta_rows}
+            meta_map = {int(r.reach_id): {"uparea": r.uparea, "rp2": r.rp2, "rp5": r.rp5, "rp10": r.rp10, "source_metadata": r.source_metadata or {}} for r in meta_rows}
 
             risk_rows = []
             detail_rows = []
             for row in chunk:
                 reach_id = int(row.get("reach_id") or row.get("river_id") or row.get("link_no") or row.get("LINKNO") or row.get("comid"))
                 timesteps = row.get("timesteps") or []
-                risk = build_risk_row(model, run_descriptor.forecast_date, reach_id, timesteps)
                 meta = meta_map.get(reach_id, {})
+                for ts in timesteps:
+                    ts.setdefault("rp2", meta.get("rp2"))
+                    ts.setdefault("rp5", meta.get("rp5"))
+                    ts.setdefault("rp10", meta.get("rp10"))
+                risk = build_risk_row(model, run_descriptor.forecast_date, reach_id, timesteps)
                 uparea = meta.get("uparea") or 0
                 region_id = str((meta.get("source_metadata") or {}).get("region_id") or "")
 
@@ -140,12 +144,21 @@ def run(model: str, forecast_date: date | None) -> None:
             logger.info("forecast run ingest model=%s forecast_date=%s chunk=%s risk_rows=%s detail_rows=%s", model, run_descriptor.forecast_date, chunk_idx, len(risk_rows), len(detail_rows))
 
 
+def _parse_forecast_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if len(raw) == 8 and raw.isdigit():
+        return datetime.strptime(raw, "%Y%m%d").date()
+    return date.fromisoformat(raw)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
     parser.add_argument("--forecast-date")
     args = parser.parse_args()
-    date_value = date.fromisoformat(args.forecast_date) if args.forecast_date else None
+    date_value = _parse_forecast_date(args.forecast_date)
     run(args.model, date_value)
 
 

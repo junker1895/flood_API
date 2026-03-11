@@ -35,9 +35,12 @@ class Settings(BaseSettings):
     forecast_priority_region_ids: str = ""
     forecast_detail_region_ids: str = ""
 
-    geoglows_forecast_reach_metadata_url: str | None = None
-    geoglows_forecast_run_manifest_url: str | None = None
-    geoglows_forecast_run_data_url_template: str | None = None
+    geoglows_forecast_bucket: str = "geoglows-v2-forecasts"
+    geoglows_forecast_prefix: str = ""
+    geoglows_metadata_bucket: str = "geoglows-v2"
+    geoglows_metadata_tables_prefix: str = "tables"
+    geoglows_return_periods_zarr_path: str = "s3://geoglows-v2/retrospective/return-periods.zarr"
+    geoglows_aws_region: str = "us-west-2"
 
     station_fresh_minutes: int = 30
     station_stale_minutes: int = 360

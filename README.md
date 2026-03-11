@@ -126,6 +126,14 @@ GEOGLOWS_FORECAST_DATE=              # optional YYYYMMDD, blank = latest forecas
 GEOGLOWS_CATALOG_ENDPOINT=/api/AvailableData/
 GEOGLOWS_REACH_METADATA_ENDPOINT=/api/GetReachInfo/
 GEOGLOWS_FALLBACK_TO_REACH_ID=true  # metadata only: try reach_id after river_id
+
+# forecast bulk ingest (AWS Open Data, anonymous)
+GEOGLOWS_FORECAST_BUCKET=geoglows-v2-forecasts
+GEOGLOWS_FORECAST_PREFIX=
+GEOGLOWS_METADATA_BUCKET=geoglows-v2
+GEOGLOWS_METADATA_TABLES_PREFIX=tables
+GEOGLOWS_RETURN_PERIODS_ZARR_PATH=s3://geoglows-v2/retrospective/return-periods.zarr
+GEOGLOWS_AWS_REGION=us-west-2
 ```
 
 Notes/limitations:
